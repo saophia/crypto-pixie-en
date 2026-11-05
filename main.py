@@ -1,17 +1,16 @@
 import os
 import re
 import json
-import asyncio
 import feedparser
 import requests
 import threading
 from datetime import datetime, time as dtime
 from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
-# ===== Render 保活 - 防止 Web Service 判定失败 =====
+# ===== Render 保活 =====
 def keep_alive():
     port = int(os.getenv("PORT", "10000"))
     class H(BaseHTTPRequestHandler):
@@ -34,7 +33,6 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID", "-1004218958873"))
 REPORT_CHAT_ID = int(os.getenv("REPORT_CHAT_ID", "-1004490905842"))
 CHAT_INVITE_LINK = os.getenv("CHAT_INVITE_LINK", "https://t.me/+n3HjK18XQmk0NDhl")
 
-# ===== 新闻源 - 美国主流 =====
 RSS_FEEDS = [
     ("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
     ("The Block", "https://www.theblock.co/rss.xml"),
@@ -44,8 +42,13 @@ RSS_FEEDS = [
 
 SENT_FILE = "sent_news.json"
 
-# ===== 防重复 + 24h 过滤 =====
+# ===== 底部按钮 =====
+def get_join_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💬 Join Discussion Group", url=CHAT_INVITE_LINK)]
+    ])
 
+# ===== 防重复 + 24h =====
 def load_sent():
     try:
         with open(SENT_FILE, "r", encoding="utf-8") as f:
@@ -63,7 +66,6 @@ def save_sent(title):
         print(f"Save sent failed: {e}")
 
 def is_fresh(published_str):
-    """只保留 24 小时内的新闻"""
     if not published_str:
         return True
     try:
@@ -81,7 +83,6 @@ def clean_html(text):
     return text.strip()[:280]
 
 def fetch_us_news(limit=10):
-    """只抓 24h 内 + 没发过的新新闻"""
     all_news = []
     sent = load_sent()
     for source, url in RSS_FEEDS:
@@ -120,43 +121,34 @@ def get_market_mood():
     except:
         return "Neutral - Market waiting for US macro data"
 
-# ===== 模版 1+2 =====
-
+# ===== 模版 1+2 - 已去掉正文里的群链接，改用按钮 =====
 def format_breaking(news):
-    """模版 1: Breaking 突发"""
     return (
         f"🚨 BREAKING: {news['title']}\n\n"
         f"{news['summary']}\n\n"
         f"Source: {news['source']}\n"
-        f"Read more: {news['link']}\n\n"
-        f"Join 👉 @你的频道用户名\n"
-        f"Discuss 👉 {CHAT_INVITE_LINK}"
+        f"Read more: {news['link']}"
     )
 
 def format_digest(news_list, date_str):
-    """模版 2: Daily Digest 日报"""
     text = f"🇺🇸 US CRYPTO DIGEST | {date_str}\n\n"
     emojis = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣"]
     for i, n in enumerate(news_list[:5]):
         text += f"{emojis[i]} {n['title']}\n{n['summary']}\n\n"
-    text += (
-        f"📊 Market Mood: {get_market_mood()}\n\n"
-        f"👉 Discuss in group: {CHAT_INVITE_LINK}"
-    )
+    text += f"📊 Market Mood: {get_market_mood()}"
     return text
 
-# ===== 发送函数 =====
-
+# ===== 发送函数 - 带按钮 =====
 async def send_breaking(context: ContextTypes.DEFAULT_TYPE, news=None):
     if not news:
         news_list = fetch_us_news(1)
         if not news_list:
-            print("Breaking: 没有新新闻，跳过，不重复发")
+            print("Breaking: 没有新新闻，跳过")
             return
         news = news_list[0]
     text = format_breaking(news)
     try:
-        await context.bot.send_message(chat_id=CHANNEL_ID, text=text, disable_web_page_preview=False)
+        await context.bot.send_message(chat_id=CHANNEL_ID, text=text, reply_markup=get_join_keyboard(), disable_web_page_preview=True)
         save_sent(news['title'])
         print(f"Breaking sent: {news['title']}")
     except Exception as e:
@@ -170,7 +162,7 @@ async def send_digest(context: ContextTypes.DEFAULT_TYPE):
     date_str = datetime.now().strftime("%b %d")
     text = format_digest(news_list, date_str)
     try:
-        await context.bot.send_message(chat_id=CHANNEL_ID, text=text)
+        await context.bot.send_message(chat_id=CHANNEL_ID, text=text, reply_markup=get_join_keyboard(), disable_web_page_preview=True)
         for n in news_list[:5]:
             save_sent(n['title'])
         print(f"Digest sent: {len(news_list)} news")
@@ -178,7 +170,6 @@ async def send_digest(context: ContextTypes.DEFAULT_TYPE):
         print(f"Digest FAILED: {e}")
 
 # ===== 命令 =====
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🇺🇸 US Crypto News Bot\n\n"
@@ -217,7 +208,7 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not news_list:
         await update.message.reply_text("24h 内没有新新闻")
         return
-    await update.message.reply_text(format_breaking(news_list[0]))
+    await update.message.reply_text(format_breaking(news_list[0]), reply_markup=get_join_keyboard())
 
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await cmd_digest(update, context)
@@ -237,33 +228,26 @@ async def handle_group_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"{emoji} {text}/USDT: ${price:,.2f} ({change:+.2f}% 24h)\n\n"
                 f"24h High: ${float(r['highPrice']):,.2f}\n"
                 f"24h Low: ${float(r['lowPrice']):,.2f}\n"
-                f"Volume: ${float(r['quoteVolume'])/1e6:.1f}M\n\n"
-                f"Discuss: {CHAT_INVITE_LINK}"
+                f"Volume: ${float(r['quoteVolume'])/1e6:.1f}M"
             )
         except Exception as e:
             await update.message.reply_text(f"暂时查不到 {text} 价格")
             print(e)
-
-# ===== 主程序 =====
 
 def main():
     if not BOT_TOKEN:
         print("ERROR: BOT_TOKEN missing")
         return
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("digest", cmd_digest))
     app.add_handler(CommandHandler("breaking", cmd_breaking))
     app.add_handler(CommandHandler("news", cmd_news))
     app.add_handler(CommandHandler("report", cmd_report))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_group_msg))
-
     if app.job_queue:
-        # 每天美东 9:00 = UTC 14:00 发 Digest
         app.job_queue.run_daily(send_digest, time=dtime(hour=14, minute=0), name="daily_digest")
-
-    print("Scheduler v40 US News 1+2 + Anti-Dup + KeepAlive - Final Channel")
+    print("Scheduler v41 US News + Button - Final Channel")
     print(f"CHANNEL_ID={CHANNEL_ID} REPORT_CHAT_ID={REPORT_CHAT_ID}")
     app.run_polling(drop_pending_updates=True)
 
