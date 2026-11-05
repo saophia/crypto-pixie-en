@@ -14,7 +14,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, ChatMemberHandler
 from telegram.ext import ChatMemberHandler as CMH
 
-# ===== Render 保活 =====
+# ===== Render 保活 - V54 FIX: 加 do_HEAD, 解决 UptimeRobot 501 =====
 def keep_alive():
     port = int(os.getenv("PORT", "10000"))
     class H(BaseHTTPRequestHandler):
@@ -22,6 +22,9 @@ def keep_alive():
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"OK - Bot is running")
+        def do_HEAD(self):
+            self.send_response(200)
+            self.end_headers()
         def log_message(self, *a):
             pass
     try:
@@ -416,7 +419,6 @@ async def _delete_after_delay(bot, chat_id, message_id, delay=600):
         print(f"Delete welcome failed: {message_id} - {e} - Check bot is admin with Delete Messages permission")
 
 def schedule_delete(context, chat_id, message_id, delay=600):
-    # 不用 job_queue，直接创建 asyncio 任务，保证一定执行
     try:
         loop = asyncio.get_running_loop()
         loop.create_task(_delete_after_delay(context.bot, chat_id, message_id, delay))
@@ -542,7 +544,7 @@ def main():
         print("JobQueue OK - Daily Digest scheduled ET 10:00")
     else:
         print("WARNING: JobQueue is None! Daily Digest will NOT auto-send. Fix requirements.txt to python-telegram-bot[job-queue]==20.7")
-    print("Scheduler v53 US News + Whale Welcome + Upstash Dedup + ET 10AM + Async Delete Fix - Final Channel")
+    print("Scheduler v54 US News + Whale Welcome + Upstash Dedup + ET 10AM + Async Delete + HEAD Fix")
     print(f"CHANNEL_ID={CHANNEL_ID} BOT_USERNAME={BOT_USERNAME} BOT_LINK={get_bot_link()}")
     app.run_polling(drop_pending_updates=True, allowed_updates=["message", "chat_member", "my_chat_member"])
 
