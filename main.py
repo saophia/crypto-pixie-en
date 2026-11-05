@@ -29,8 +29,6 @@ threading.Thread(target=keep_alive, daemon=True).start()
 
 # ===== 配置 =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-# V46: 已固定为你的真实 Bot，不用再去 Render 配 BOT_USERNAME 也能跳对
-# 如果以后换 Bot，改这里或在 Render 里配 BOT_USERNAME 覆盖都行
 BOT_USERNAME = os.getenv("BOT_USERNAME", "crypto_pixie_bot")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "-1004218958873"))
 REPORT_CHAT_ID = int(os.getenv("REPORT_CHAT_ID", "-1004490905842"))
@@ -54,10 +52,11 @@ COIN_KEYWORDS = {
     "XRP": ["xrp", "ripple"],
 }
 
-# ===== 底部按钮 V46 - 全英文 =====
+# ===== 底部按钮 V47 - 带 start 参数 =====
 def get_bot_link():
     username = BOT_USERNAME.strip() if BOT_USERNAME else "crypto_pixie_bot"
-    return f"https://t.me/{username}"
+    # V47: 带 from_channel 参数，Bot 能识别是从频道点进来的
+    return f"https://t.me/{username}?start=from_channel"
 
 def get_join_keyboard():
     return InlineKeyboardMarkup([
@@ -353,8 +352,21 @@ async def send_digest(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print(f"Digest FAILED: {e}")
 
-# ===== 命令 =====
+# ===== 命令 - V47: 从频道进来的自动提示 =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # context.args[0] 就是 ?start= 后面的参数
+    payload = context.args[0] if context.args else ""
+
+    if payload == "from_channel":
+        # 从频道点按钮进来的用户，只发这一句提示语 + 欢迎语
+        await update.message.reply_text(
+            "👋 Welcome to Crypto Pixie Bot!\n\n"
+            "💬 Send <code>BTC</code> / <code>ETH</code> / <code>SOL</code> / <code>DOGE</code> / <code>XRP</code> to check other coins",
+            parse_mode="HTML"
+        )
+        return
+
+    # 正常直接搜到 Bot 进来的
     await update.message.reply_text(
         "🇺🇸 US Crypto News Bot\n\n"
         "Channel: Breaking + Daily Digest\n"
@@ -421,7 +433,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_group_msg))
     if app.job_queue:
         app.job_queue.run_daily(send_digest, time=dtime(hour=14, minute=0), name="daily_digest")
-    print("Scheduler v46 US News + crypto_pixie_bot - Final Channel")
+    print("Scheduler v47 US News + Auto Welcome from Channel - Final Channel")
     print(f"CHANNEL_ID={CHANNEL_ID} BOT_USERNAME={BOT_USERNAME} BOT_LINK={get_bot_link()}")
     app.run_polling(drop_pending_updates=True)
 
