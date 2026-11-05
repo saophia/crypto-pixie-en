@@ -42,10 +42,11 @@ RSS_FEEDS = [
 
 SENT_FILE = "sent_news.json"
 
-# ===== 底部按钮 =====
+# ===== 底部按钮 - 2个 =====
 def get_join_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💬 Join Discussion Group", url=CHAT_INVITE_LINK)]
+        [InlineKeyboardButton("💬 Join Discussion Group", url=CHAT_INVITE_LINK)],
+        [InlineKeyboardButton("📊 Check BTC Price in Group", url=CHAT_INVITE_LINK)]
     ])
 
 # ===== 防重复 + 24h =====
@@ -79,7 +80,9 @@ def clean_html(text):
     if not text:
         return ""
     text = re.sub(r'<[^>]+>', '', text)
-    text = text.replace("&nbsp;", " ").replace("&amp;", "&")
+    text = text.replace("&nbsp;", " ").replace("&amp;", "&").replace("&quot;", '"')
+    # 防止标题里的 < > 破坏 HTML 解析
+    text = text.replace("<", "").replace(">", "")
     return text.strip()[:280]
 
 def fetch_us_news(limit=10):
@@ -89,7 +92,7 @@ def fetch_us_news(limit=10):
         try:
             feed = feedparser.parse(url)
             for entry in feed.entries[:8]:
-                title = entry.title.strip()
+                title = entry.title.strip().replace("<", "").replace(">", "")
                 published = getattr(entry, 'published', '')
                 if not is_fresh(published):
                     continue
@@ -121,24 +124,59 @@ def get_market_mood():
     except:
         return "Neutral - Market waiting for US macro data"
 
-# ===== 模版 1+2 - 已去掉正文里的群链接，改用按钮 =====
+def get_btc_price_line():
+    try:
+        r = requests.get("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT", timeout=5).json()
+        price = float(r['lastPrice'])
+        change = float(r['priceChangePercent'])
+        emoji = "🟢" if change >= 0 else "🔴"
+        return f"{emoji} BTC ${price:,.0f} ({change:+.2f}% 24h)"
+    except:
+        return "BTC price unavailable"
+
+# ===== 模版 V42 - 新版面 =====
 def format_breaking(news):
     return (
-        f"🚨 BREAKING: {news['title']}\n\n"
+        f"🚨 <b>BREAKING</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n\n"
+        f"<b>{news['title']}</b>\n\n"
         f"{news['summary']}\n\n"
         f"Source: {news['source']}\n"
         f"Read more: {news['link']}"
     )
 
 def format_digest(news_list, date_str):
-    text = f"🇺🇸 US CRYPTO DIGEST | {date_str}\n\n"
+    if not news_list:
+        return "No news today"
+
+    top = news_list[0]
+
+    text = f"<b>🇺🇸 US CRYPTO DIGEST | {date_str}</b>\n"
+    text += f"Your daily 5-min US crypto briefing\n"
+    text += "━━━━━━━━━━━━━━━━━━\n\n"
+
+    # TOP STORY
+    text += f"🔥 <b>TOP STORY</b>\n"
+    text += f"<b>{top['title']}</b>\n"
+    text += f"{top['summary']}\n\n"
+    text += "━━━━━━━━━━━━━━━━━━\n\n"
+
+    # TOP 5
+    text += f"📰 <b>TODAY'S TOP 5</b>\n\n"
     emojis = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣"]
     for i, n in enumerate(news_list[:5]):
-        text += f"{emojis[i]} {n['title']}\n{n['summary']}\n\n"
-    text += f"📊 Market Mood: {get_market_mood()}"
+        text += f"{emojis[i]} <b>{n['title']}</b>\n{n['summary']}\n\n"
+
+    # MARKET
+    text += "━━━━━━━━━━━━━━━━━━\n"
+    text += f"📊 <b>MARKET SNAPSHOT</b>\n"
+    text += f"{get_btc_price_line()}\n"
+    text += f"🧭 {get_market_mood()}\n"
+    text += f"💬 Send <code>BTC</code> / <code>ETH</code> / <code>SOL</code> in group for live price"
+
     return text
 
-# ===== 发送函数 - 带按钮 =====
+# ===== 发送函数 =====
 async def send_breaking(context: ContextTypes.DEFAULT_TYPE, news=None):
     if not news:
         news_list = fetch_us_news(1)
@@ -148,7 +186,7 @@ async def send_breaking(context: ContextTypes.DEFAULT_TYPE, news=None):
         news = news_list[0]
     text = format_breaking(news)
     try:
-        await context.bot.send_message(chat_id=CHANNEL_ID, text=text, reply_markup=get_join_keyboard(), disable_web_page_preview=True)
+        await context.bot.send_message(chat_id=CHANNEL_ID, text=text, parse_mode="HTML", reply_markup=get_join_keyboard(), disable_web_page_preview=True)
         save_sent(news['title'])
         print(f"Breaking sent: {news['title']}")
     except Exception as e:
@@ -162,7 +200,7 @@ async def send_digest(context: ContextTypes.DEFAULT_TYPE):
     date_str = datetime.now().strftime("%b %d")
     text = format_digest(news_list, date_str)
     try:
-        await context.bot.send_message(chat_id=CHANNEL_ID, text=text, reply_markup=get_join_keyboard(), disable_web_page_preview=True)
+        await context.bot.send_message(chat_id=CHANNEL_ID, text=text, parse_mode="HTML", reply_markup=get_join_keyboard(), disable_web_page_preview=True)
         for n in news_list[:5]:
             save_sent(n['title'])
         print(f"Digest sent: {len(news_list)} news")
@@ -208,7 +246,7 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not news_list:
         await update.message.reply_text("24h 内没有新新闻")
         return
-    await update.message.reply_text(format_breaking(news_list[0]), reply_markup=get_join_keyboard())
+    await update.message.reply_text(format_breaking(news_list[0]), parse_mode="HTML", reply_markup=get_join_keyboard())
 
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await cmd_digest(update, context)
@@ -247,7 +285,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_group_msg))
     if app.job_queue:
         app.job_queue.run_daily(send_digest, time=dtime(hour=14, minute=0), name="daily_digest")
-    print("Scheduler v41 US News + Button - Final Channel")
+    print("Scheduler v42 US News + New Layout - Final Channel")
     print(f"CHANNEL_ID={CHANNEL_ID} REPORT_CHAT_ID={REPORT_CHAT_ID}")
     app.run_polling(drop_pending_updates=True)
 
