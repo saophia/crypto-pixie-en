@@ -10,8 +10,8 @@ from PIL import Image, ImageDraw, ImageFont
 import xml.etree.ElementTree as ET
 
 TOKEN = os.getenv("BOT_TOKEN")
-REPORT_CHAT_ID = os.getenv("REPORT_CHAT_ID") or "-1003734717383"
-CHANNEL_ID = os.getenv("CHANNEL_ID") or "-1004496994086"
+REPORT_CHAT_ID = os.getenv("REPORT_CHAT_ID") or "-1004218958873"
+CHANNEL_ID = os.getenv("CHANNEL_ID") or "-1004218958873"
 CHAT_INVITE_LINK = os.getenv("CHAT_INVITE_LINK") or "https://t.me/+QCwJQgsg9EliY2Qx"
 
 if not TOKEN: raise ValueError("BOT_TOKEN not set!")
@@ -88,7 +88,7 @@ async def get_real_price(session, sym):
     except Exception as e: print(f"Binance vision fail {sym} {e}")
     return None, None
 
-# ===== US NEWS - DIRECT RSS, NO rss2json =====
+# ===== US NEWS - DIRECT RSS =====
 async def get_top5_news():
     real_news = []
     crypto_keywords = ["bitcoin","btc","ethereum","eth","ton","crypto","blockchain","token","solana","sol","doge","usdt","tether","binance","coin","mining","defi","etf","xrp","sec","whale"]
@@ -338,7 +338,7 @@ async def price_alert_loop():
             except: await asyncio.sleep(60)
 
 async def scheduler_loop():
-    print(f"Scheduler v37 US News EN - Final")
+    print(f"Scheduler v37 US News EN - Final New Channel")
     while True:
         try:
             now_et=datetime.now(ET_TZ)
@@ -405,7 +405,7 @@ async def main():
 
 app=Flask(__name__)
 @app.route('/')
-def home(): return 'ok v37 US News EN Final'
+def home(): return 'ok v37 US News EN Final New Channel -1004218958873'
 
 def run_flask():
     port=int(os.environ.get("PORT",10000)); app.run(host='0.0.0.0',port=port)
