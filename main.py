@@ -42,6 +42,9 @@ RSS_FEEDS = [
 
 SENT_FILE = "sent_news.json"
 
+# CoinGecko 映射 - 美国服务器可用，Binance 会被墙
+COINS = {"BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "DOGE": "dogecoin", "XRP": "ripple"}
+
 # ===== 底部按钮 - 2个 =====
 def get_join_keyboard():
     return InlineKeyboardMarkup([
@@ -81,7 +84,6 @@ def clean_html(text):
         return ""
     text = re.sub(r'<[^>]+>', '', text)
     text = text.replace("&nbsp;", " ").replace("&amp;", "&").replace("&quot;", '"')
-    # 防止标题里的 < > 破坏 HTML 解析
     text = text.replace("<", "").replace(">", "")
     return text.strip()[:280]
 
@@ -125,16 +127,21 @@ def get_market_mood():
         return "Neutral - Market waiting for US macro data"
 
 def get_btc_price_line():
+    # V43: 改用 CoinGecko，Binance 在 Render 美国 IP 上会被墙
     try:
-        r = requests.get("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT", timeout=5).json()
-        price = float(r['lastPrice'])
-        change = float(r['priceChangePercent'])
+        r = requests.get(
+            "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true",
+            timeout=8
+        ).json()
+        price = r['bitcoin']['usd']
+        change = r['bitcoin']['usd_24h_change']
         emoji = "🟢" if change >= 0 else "🔴"
         return f"{emoji} BTC ${price:,.0f} ({change:+.2f}% 24h)"
-    except:
+    except Exception as e:
+        print(f"BTC price failed: {e}")
         return "BTC price unavailable"
 
-# ===== 模版 V42 - 新版面 =====
+# ===== 模版 V43 - 已修重复 =====
 def format_breaking(news):
     return (
         f"🚨 <b>BREAKING</b>\n"
@@ -150,6 +157,7 @@ def format_digest(news_list, date_str):
         return "No news today"
 
     top = news_list[0]
+    rest = news_list[1:6]  # V43 修复：从第2条开始，不再和 TOP STORY 重复
 
     text = f"<b>🇺🇸 US CRYPTO DIGEST | {date_str}</b>\n"
     text += f"Your daily 5-min US crypto briefing\n"
@@ -161,10 +169,10 @@ def format_digest(news_list, date_str):
     text += f"{top['summary']}\n\n"
     text += "━━━━━━━━━━━━━━━━━━\n\n"
 
-    # TOP 5
+    # TOP 5 - 实际是第 2-6 条
     text += f"📰 <b>TODAY'S TOP 5</b>\n\n"
     emojis = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣"]
-    for i, n in enumerate(news_list[:5]):
+    for i, n in enumerate(rest[:5]):
         text += f"{emojis[i]} <b>{n['title']}</b>\n{n['summary']}\n\n"
 
     # MARKET
@@ -201,7 +209,7 @@ async def send_digest(context: ContextTypes.DEFAULT_TYPE):
     text = format_digest(news_list, date_str)
     try:
         await context.bot.send_message(chat_id=CHANNEL_ID, text=text, parse_mode="HTML", reply_markup=get_join_keyboard(), disable_web_page_preview=True)
-        for n in news_list[:5]:
+        for n in news_list[:6]:
             save_sent(n['title'])
         print(f"Digest sent: {len(news_list)} news")
     except Exception as e:
@@ -255,18 +263,26 @@ async def handle_group_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
     text = update.message.text.strip().upper()
-    if text in ["BTC", "ETH", "SOL", "DOGE", "XRP"]:
+    if text in COINS:
         try:
-            coin = text.lower()
-            r = requests.get(f"https://api.binance.com/api/v3/ticker/24hr?symbol={coin}USDT", timeout=5).json()
-            price = float(r['lastPrice'])
-            change = float(r['priceChangePercent'])
+            # V43: 群里查价也换 CoinGecko，不再用 Binance
+            coin_id = COINS[text]
+            r = requests.get(
+                f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd&include_24hr_change=true&include_24hr_high_low=true&include_24hr_vol=true",
+                timeout=8
+            ).json()
+            d = r[coin_id]
+            price = d['usd']
+            change = d.get('usd_24h_change', 0)
+            high = d.get('usd_24h_high', 0)
+            low = d.get('usd_24h_low', 0)
+            vol = d.get('usd_24h_vol', 0)
             emoji = "🟢" if change >= 0 else "🔴"
             await update.message.reply_text(
-                f"{emoji} {text}/USDT: ${price:,.2f} ({change:+.2f}% 24h)\n\n"
-                f"24h High: ${float(r['highPrice']):,.2f}\n"
-                f"24h Low: ${float(r['lowPrice']):,.2f}\n"
-                f"Volume: ${float(r['quoteVolume'])/1e6:.1f}M"
+                f"{emoji} {text}/USD: ${price:,.2f} ({change:+.2f}% 24h)\n\n"
+                f"24h High: ${high:,.2f}\n"
+                f"24h Low: ${low:,.2f}\n"
+                f"Volume: ${vol/1e6:.1f}M"
             )
         except Exception as e:
             await update.message.reply_text(f"暂时查不到 {text} 价格")
@@ -285,7 +301,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_group_msg))
     if app.job_queue:
         app.job_queue.run_daily(send_digest, time=dtime(hour=14, minute=0), name="daily_digest")
-    print("Scheduler v42 US News + New Layout - Final Channel")
+    print("Scheduler v43 US News + Fix Dup + CoinGecko - Final Channel")
     print(f"CHANNEL_ID={CHANNEL_ID} REPORT_CHAT_ID={REPORT_CHAT_ID}")
     app.run_polling(drop_pending_updates=True)
 
