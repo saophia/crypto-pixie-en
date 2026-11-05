@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import hashlib
 import feedparser
 import requests
 import threading
@@ -42,7 +43,6 @@ RSS_FEEDS = [
     ("Cointelegraph", "https://cointelegraph.com/rss"),
 ]
 
-SENT_FILE = "sent_news.json"
 COINS = {"BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "DOGE": "dogecoin", "XRP": "ripple"}
 
 COIN_KEYWORDS = {
@@ -52,6 +52,65 @@ COIN_KEYWORDS = {
     "DOGE": ["dogecoin", "doge"],
     "XRP": ["xrp", "ripple"],
 }
+
+# ===== V51: 去重 - Upstash Redis (免费版永久去重) =====
+UPSTASH_URL = os.getenv("UPSTASH_REDIS_REST_URL", "")
+UPSTASH_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN", "")
+_SENT_CACHE = set()
+
+def _title_hash(title: str) -> str:
+    return hashlib.md5(title.strip().lower().encode()).hexdigest()
+
+def _upstash_get(key: str):
+    if not UPSTASH_URL or not UPSTASH_TOKEN:
+        return None
+    try:
+        r = requests.get(
+            f"{UPSTASH_URL}/get/{key}",
+            headers={"Authorization": f"Bearer {UPSTASH_TOKEN}"},
+            timeout=5
+        )
+        return r.json().get("result")
+    except:
+        return None
+
+def _upstash_set(key: str, value: str):
+    if not UPSTASH_URL or not UPSTASH_TOKEN:
+        return
+    try:
+        requests.get(
+            f"{UPSTASH_URL}/set/{key}/{value}",
+            headers={"Authorization": f"Bearer {UPSTASH_TOKEN}"},
+            timeout=5
+        )
+    except Exception as e:
+        print(f"Upstash set failed: {e}")
+
+def load_sent():
+    global _SENT_CACHE
+    if _SENT_CACHE:
+        return _SENT_CACHE
+    raw = _upstash_get("sent_news_hashes")
+    if raw:
+        try:
+            _SENT_CACHE = set(json.loads(raw))
+        except:
+            _SENT_CACHE = set()
+    return _SENT_CACHE
+
+def save_sent(title):
+    h = _title_hash(title)
+    sent = load_sent()
+    if h in sent:
+        return
+    sent.add(h)
+    if len(sent) > 500:
+        sent = set(list(sent)[-500:])
+    _SENT_CACHE = sent
+    try:
+        _upstash_set("sent_news_hashes", json.dumps(list(sent)))
+    except Exception as e:
+        print(f"Save sent failed: {e}")
 
 # ===== V50: 进频道欢迎 - 纯英文 + 按钮向右 =====
 WHALE_WELCOME_TEXT = (
@@ -86,23 +145,7 @@ def get_join_keyboard():
         [InlineKeyboardButton("🔍 View More Crypto Details", url=get_bot_link())],
     ])
 
-# ===== 防重复 + 24h =====
-def load_sent():
-    try:
-        with open(SENT_FILE, "r", encoding="utf-8") as f:
-            return set(json.load(f))
-    except:
-        return set()
-
-def save_sent(title):
-    sent = load_sent()
-    sent.add(title)
-    try:
-        with open(SENT_FILE, "w", encoding="utf-8") as f:
-            json.dump(list(sent)[-200:], f, ensure_ascii=False)
-    except Exception as e:
-        print(f"Save sent failed: {e}")
-
+# ===== 24h 新鲜度 =====
 def is_fresh(published_str):
     if not published_str:
         return True
@@ -132,7 +175,7 @@ def fetch_us_news(limit=10):
                 published = getattr(entry, 'published', '')
                 if not is_fresh(published):
                     continue
-                if title in sent:
+                if _title_hash(title) in sent:
                     continue
                 all_news.append({
                     "title": title,
@@ -507,7 +550,7 @@ def main():
     app.add_handler(CMH(on_channel_join, CMH.CHAT_MEMBER))
     if app.job_queue:
         app.job_queue.run_daily(send_digest, time=dtime(hour=14, minute=0), name="daily_digest")
-    print("Scheduler v50 US News + Whale Welcome Pure English - Final Channel")
+    print("Scheduler v51 US News + Whale Welcome + Upstash Dedup - Final Channel")
     print(f"CHANNEL_ID={CHANNEL_ID} BOT_USERNAME={BOT_USERNAME} BOT_LINK={get_bot_link()}")
     app.run_polling(drop_pending_updates=True, allowed_updates=["message", "chat_member", "my_chat_member"])
 
