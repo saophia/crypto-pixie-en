@@ -7,6 +7,7 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, C
 from flask import Flask
 import threading
 from PIL import Image, ImageDraw, ImageFont
+import xml.etree.ElementTree as ET
 
 TOKEN = os.getenv("BOT_TOKEN")
 REPORT_CHAT_ID = os.getenv("REPORT_CHAT_ID") or "-1003734717383"
@@ -49,30 +50,20 @@ async def fetch_json(session, url):
         print(f"fetch fail {url} {e}")
     return None
 
-# ===== Price - 5 sources, same as your RU version =====
 async def get_real_price(session, sym):
-    print(f"GET PRICE {sym}")
     try:
         data = await fetch_json(session, f"https://www.okx.com/api/v5/market/ticker?instId={sym}-USDT")
         if data and data.get('data'):
             d = data['data'][0]
-            last = float(d.get('last') or 0)
-            open24 = float(d.get('open24h') or 0)
-            if last > 0 and open24 > 0:
-                return last, (last-open24)/open24*100
-            if last > 0:
-                candles = await fetch_json(session, f"https://www.okx.com/api/v5/market/candles?instId={sym}-USDT&bar=1H&limit=24")
-                if candles and candles.get('data') and len(candles['data'])>=2:
-                    newest = float(candles['data'][0][4]); oldest = float(candles['data'][-1][1])
-                    if oldest>0: return last, (newest-oldest)/oldest*100
-                return last, 0.0
+            last = float(d.get('last') or 0); open24 = float(d.get('open24h') or 0)
+            if last > 0 and open24 > 0: return last, (last-open24)/open24*100
+            if last > 0: return last, 0.0
     except Exception as e: print(f"OKX spot fail {sym} {e}")
     try:
         data = await fetch_json(session, f"https://www.okx.com/api/v5/market/ticker?instId={sym}-USDT-SWAP")
         if data and data.get('data'):
             d = data['data'][0]
-            last = float(d.get('last') or 0)
-            open24 = float(d.get('open24h') or 0)
+            last = float(d.get('last') or 0); open24 = float(d.get('open24h') or 0)
             if last>0 and open24>0: return last, (last-open24)/open24*100
             if last>0: return last, 0.0
     except Exception as e: print(f"OKX swap fail {sym} {e}")
@@ -80,8 +71,7 @@ async def get_real_price(session, sym):
         data = await fetch_json(session, f"https://api.bybit.com/v5/market/tickers?category=spot&symbol={sym}USDT")
         if data and data.get('result') and data['result'].get('list'):
             d = data['result']['list'][0]
-            last = float(d.get('lastPrice') or 0)
-            change = float(d.get('price24hPcnt') or 0)*100
+            last = float(d.get('lastPrice') or 0); change = float(d.get('price24hPcnt') or 0)*100
             if last>0: return last, change
     except Exception as e: print(f"Bybit fail {sym} {e}")
     try:
@@ -94,64 +84,59 @@ async def get_real_price(session, sym):
     except Exception as e: print(f"CG fail {sym} {e}")
     try:
         bn = await fetch_json(session, f"https://data-api.binance.vision/api/v3/ticker/24hr?symbol={sym}USDT")
-        if bn and 'lastPrice' in bn:
-            return float(bn['lastPrice']), float(bn['priceChangePercent'])
+        if bn and 'lastPrice' in bn: return float(bn['lastPrice']), float(bn['priceChangePercent'])
     except Exception as e: print(f"Binance vision fail {sym} {e}")
-    print(f"ALL FAIL {sym}")
     return None, None
 
-# ===== NEWS - CHANGED TO US SOURCES, ENGLISH =====
+# ===== US NEWS - DIRECT RSS, NO rss2json =====
 async def get_top5_news():
     real_news = []
-    # US crypto keywords - filter out AI / non-crypto noise
-    crypto_keywords = ["bitcoin","btc","ethereum","eth","ton","crypto","blockchain","token","solana","sol","doge","usdt","tether","binance","coin","mining","defi","etf","xrp","sec","whale","lisk","liquid"]
-    async with aiohttp.ClientSession(headers={"User-Agent":"Mozilla/5.0"}) as s:
-        # US RSS via rss2json - CoinDesk / Cointelegraph US / Decrypt
+    crypto_keywords = ["bitcoin","btc","ethereum","eth","ton","crypto","blockchain","token","solana","sol","doge","usdt","tether","binance","coin","mining","defi","etf","xrp","sec","whale"]
+    async with aiohttp.ClientSession(headers={"User-Agent":"Mozilla/5.0"}, timeout=aiohttp.ClientTimeout(total=8)) as s:
         rss_sources = [
-            "https://api.rss2json.com/v1/api.json?rss_url=https://www.coindesk.com/arc/outboundfeeds/rss/",
-            "https://api.rss2json.com/v1/api.json?rss_url=https://cointelegraph.com/rss",
-            "https://api.rss2json.com/v1/api.json?rss_url=https://decrypt.co/feed",
+            "https://www.coindesk.com/arc/outboundfeeds/rss/",
+            "https://cointelegraph.com/rss",
         ]
         for rss_url in rss_sources:
             try:
-                data = await fetch_json(s, rss_url)
-                if not data or not data.get('items'): continue
-                for item in data['items']:
-                    title = item.get('title','').strip()
-                    link = item.get('link','').strip()
-                    # rss2json gives thumbnail / enclosure for REAL image from article
-                    image = item.get('thumbnail') or item.get('enclosure', {}).get('link') if isinstance(item.get('enclosure'), dict) else item.get('thumbnail')
-                    if not image:
-                        # try content image
-                        content = item.get('content','') or item.get('description','')
-                        m = re.search(r'<img[^>]+src="([^"]+)"', content)
-                        if m: image = m.group(1)
-                    if len(title)<15: continue
-                    low = title.lower()
-                    if "openai" in low or "ai act" in low: continue
-                    if not any(k in low for k in crypto_keywords): continue
-                    if any(x['url']==link for x in real_news): continue
-                    # Clean description
-                    desc = re.sub(r"<[^>]+>", "", item.get('description','') or "")[:140]
-                    real_news.append({"title": title[:90], "url": link, "desc": desc, "image": image})
-                    if len(real_news)>=5: break
+                async with s.get(rss_url) as r:
+                    if r.status != 200:
+                        print(f"RSS {r.status} {rss_url}"); continue
+                    text = await r.text()
+                    root = ET.fromstring(text)
+                    for item in root.findall(".//item")[:10]:
+                        title = (item.findtext("title") or "").strip()
+                        link = (item.findtext("link") or "").strip()
+                        desc_raw = item.findtext("description") or ""
+                        desc = re.sub(r"<[^>]+>", "", desc_raw)[:140]
+                        image = None
+                        for child in item:
+                            tag = child.tag.lower()
+                            if "content" in tag or "thumbnail" in tag or "enclosure" in tag:
+                                image = child.get("url") or child.get("href")
+                                if image: break
+                        if len(title) < 15: continue
+                        low = title.lower()
+                        if "openai" in low: continue
+                        if not any(k in low for k in crypto_keywords): continue
+                        if any(x['url']==link for x in real_news): continue
+                        real_news.append({"title": title[:90], "url": link, "desc": desc, "image": image})
+                        if len(real_news) >= 5: break
             except Exception as e:
-                print(f"RSS fail {rss_url} {e}")
-                continue
-            if len(real_news)>=5: break
-    if len(real_news)<3:
-        # Fallback - only if all US RSS down
+                print(f"RSS fail {rss_url}: {e}"); continue
+            if len(real_news) >= 5: break
+    print(f"Got {len(real_news)} US news")
+    if len(real_news) < 3:
         real_news = [
             {"title":"Bitcoin trades near $76,800, ETF outflows hit $399M","url":"https://www.coindesk.com/","desc":"Bitcoin holds near key level as ETF outflows continue.","image":None},
             {"title":"Fear & Greed Index drops to 26 - market in fear zone","url":"https://www.coindesk.com/","desc":"Sentiment turns fearful across crypto market.","image":None},
             {"title":"TON holds $1.58-1.64 as altcoins fall","url":"https://cointelegraph.com/","desc":"TON shows resilience while altcoins drop.","image":None},
-            {"title":"Lisk shuts down Layer-2 network, plans to burn 5.2M LSK","url":"https://cointelegraph.com/","desc":"Lisk announces L2 shutdown and token burn.","image":None},
-            {"title":"Liquid Network restores L-BTC backing after exploit","url":"https://decrypt.co/","desc":"Liquid restores peg after security incident.","image":None},
+            {"title":"Lisk shuts down Layer-2, plans to burn 5.2M LSK","url":"https://cointelegraph.com/","desc":"Lisk announces L2 shutdown and token burn.","image":None},
+            {"title":"Liquid Network restores L-BTC backing after exploit","url":"https://cointelegraph.com/","desc":"Liquid restores peg after incident.","image":None},
         ]
     return real_news[:5]
 
 def make_cover(image_url, title):
-    """Download REAL news image, draw title on it - Magazine cover"""
     try:
         import requests
         r = requests.get(image_url, timeout=10, headers={"User-Agent":"Mozilla/5.0"})
@@ -176,31 +161,23 @@ def make_cover(image_url, title):
             font_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 44)
             font_tag = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 28)
         except:
-            font_title = ImageFont.load_default()
-            font_tag = ImageFont.load_default()
-        words = title.split()
-        lines, cur = [], ""
+            font_title = ImageFont.load_default(); font_tag = ImageFont.load_default()
+        words = title.split(); lines, cur = [], ""
         for wd in words:
             test = (cur + " " + wd).strip()
-            if draw.textlength(test, font=font_title) < w - 80:
-                cur = test
-            else:
-                lines.append(cur); cur = wd
+            if draw.textlength(test, font=font_title) < w - 80: cur = test
+            else: lines.append(cur); cur = wd
         if cur: lines.append(cur)
         lines = lines[:3]
         draw.rectangle([40, h-260, 240, h-210], fill=(220, 38, 38))
         draw.text((55, h-252), "TOP STORY", fill="white", font=font_tag)
         y = h - 200
         for line in lines:
-            draw.text((40, y), line, fill="white", font=font_title)
-            y += 55
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=88)
-        buf.seek(0)
+            draw.text((40, y), line, fill="white", font=font_title); y += 55
+        buf = io.BytesIO(); img.save(buf, format="JPEG", quality=88); buf.seek(0)
         return buf
     except Exception as e:
-        print(f"Make cover fail: {e}")
-        return None
+        print(f"Make cover fail: {e}"); return None
 
 async def get_analysis(symbol="btc"):
     sym=symbol.upper()
@@ -230,8 +207,7 @@ async def get_analysis(symbol="btc"):
         if rub and rub.get('data'):
             try: usdt_rub=float(rub['data'][0]['last'])
             except: pass
-        conclusion="Fundamentally positive, technically oversold. Rebound possible." if rsi<=38 else "Fundamentally positive, technically overbought. Pullback possible." if rsi>=68 else "Neutral. Sideways."
-        if rsi>38 and rsi<68: conclusion="Fundamentally positive, technically neutral."
+        conclusion="Fundamentally positive, technically oversold. Rebound possible." if rsi<=38 else "Fundamentally positive, technically overbought. Pullback possible." if rsi>=68 else "Fundamentally positive, technically neutral."
         return {"price":price_usd,"change":change,"ma7_text":ma7_text,"rsi_text":rsi_text,"fg_val":fg_val,"fg_text":fg_text,"news":top[:3],"rub":usdt_rub,"conclusion":conclusion}
 
 def format_text(symbol,a):
@@ -281,17 +257,14 @@ Tomorrow at 7:00 AM ET morning digest.
 #evening #TON"""
     return text, top5, results
 
-# ===== NEW: Single-message Magazine News - US version =====
 async def send_single_news(chat_id):
     try:
         top5 = await get_top5_news()
         if not top5:
-            await bot.send_message(chat_id=int(chat_id), text="Failed to fetch news, try again later.")
-            return
+            await bot.send_message(chat_id=int(chat_id), text="Failed to fetch news, try again later."); return
         head = top5[0]
         def short(t, n=75):
-            t = t.strip()
-            return t if len(t) <= n else t[:n] + "..."
+            t = t.strip(); return t if len(t) <= n else t[:n] + "..."
         caption = "📰 <b>CRYPTO DAILY NEWS</b>\n\n"
         caption += f"🔥 <b>{short(head['title'], 90)}</b>\n"
         caption += f"{short(head.get('desc',''), 110)}\n"
@@ -302,10 +275,13 @@ async def send_single_news(chat_id):
             caption += f"{emojis[i]} <b>{short(n['title'], 65)}</b>\n"
             caption += f"<a href=\"{n['url']}\">Read →</a>\n\n"
         caption += "— Crypto Pixie ✨"
-        if len(caption) > 1000:
-            caption = caption[:1000]
-        cover = make_cover(head.get('image'), head['title']) if head.get('image') else None
-        # One message only
+        if len(caption) > 1000: caption = caption[:1000]
+        cover = None
+        try:
+            if head.get('image'):
+                cover = await asyncio.to_thread(make_cover, head.get('image'), head['title'])
+        except Exception as e:
+            print(f"cover skip: {e}"); cover = None
         if cover:
             await bot.send_photo(chat_id=int(chat_id), photo=cover, caption=caption, parse_mode="HTML")
         elif head.get('image'):
@@ -319,17 +295,15 @@ async def send_single_news(chat_id):
 async def send_digest(is_morning=True):
     try:
         me=await bot.get_me()
-        # Morning: send magazine single news first, then digest
         if is_morning:
-            await send_single_news(CHANNEL_ID)
-            await asyncio.sleep(1)
+            await send_single_news(CHANNEL_ID); await asyncio.sleep(1)
         text, top5, results = await build_digest(is_morning)
         kb=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"BTC ${results['BTC']['price']:,.0f} - Analysis" if results['BTC']['price']>0 else "BTC - Analysis", url=f"https://t.me/{me.username}?start=analyze")],
             [InlineKeyboardButton(text="💬 Whale Chat", url=CHAT_INVITE_LINK)]
         ])
         await bot.send_message(chat_id=int(CHANNEL_ID), text=text, parse_mode="HTML", disable_web_page_preview=True, reply_markup=kb)
-        print(f"✅ Digest sent {results}")
+        print(f"✅ Digest sent")
     except Exception as e: print(f"❌ DIGEST FAILED: {e}")
 
 async def price_alert_loop():
@@ -364,7 +338,7 @@ async def price_alert_loop():
             except: await asyncio.sleep(60)
 
 async def scheduler_loop():
-    print(f"Scheduler v37 US News EN")
+    print(f"Scheduler v37 US News EN - Final")
     while True:
         try:
             now_et=datetime.now(ET_TZ)
@@ -414,12 +388,10 @@ async def handle_any(m:Message):
 async def start(m:Message): await m.answer("Hi! Send ticker: BTC, ETH, TON...")
 @dp.message(Command("report"))
 async def manual_report(m:Message):
-    await m.answer(f"Sending digest...")
-    await send_digest(False)
+    await m.answer(f"Sending digest..."); await send_digest(False)
 @dp.message(Command("news"))
 async def news_cmd(m:Message):
-    await m.answer("Fetching latest US news...")
-    await send_single_news(m.chat.id)
+    await m.answer("Fetching latest US news..."); await send_single_news(m.chat.id)
 
 @dp.message(F.text)
 async def private_msg(m:Message): await handle_any(m)
@@ -433,7 +405,7 @@ async def main():
 
 app=Flask(__name__)
 @app.route('/')
-def home(): return 'ok v37 US News EN'
+def home(): return 'ok v37 US News EN Final'
 
 def run_flask():
     port=int(os.environ.get("PORT",10000)); app.run(host='0.0.0.0',port=port)
