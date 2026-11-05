@@ -4,10 +4,29 @@ import json
 import asyncio
 import feedparser
 import requests
+import threading
 from datetime import datetime, time as dtime
 from email.utils import parsedate_to_datetime
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+
+# ===== Render 保活 - 防止 Web Service 判定失败 =====
+def keep_alive():
+    port = int(os.getenv("PORT", "10000"))
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK - Bot is running")
+        def log_message(self, *a):
+            pass
+    try:
+        HTTPServer(("0.0.0.0", port), H).serve_forever()
+    except Exception as e:
+        print(f"Web server failed: {e}")
+
+threading.Thread(target=keep_alive, daemon=True).start()
 
 # ===== 配置 =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -244,7 +263,7 @@ def main():
         # 每天美东 9:00 = UTC 14:00 发 Digest
         app.job_queue.run_daily(send_digest, time=dtime(hour=14, minute=0), name="daily_digest")
 
-    print("Scheduler v39 US News 1+2 + Anti-Dup - Final Channel")
+    print("Scheduler v40 US News 1+2 + Anti-Dup + KeepAlive - Final Channel")
     print(f"CHANNEL_ID={CHANNEL_ID} REPORT_CHAT_ID={REPORT_CHAT_ID}")
     app.run_polling(drop_pending_updates=True)
 
