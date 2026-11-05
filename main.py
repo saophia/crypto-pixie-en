@@ -41,11 +41,9 @@ RSS_FEEDS = [
 ]
 
 SENT_FILE = "sent_news.json"
-
-# CoinGecko 映射 - 美国服务器可用，Binance 会被墙
 COINS = {"BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "DOGE": "dogecoin", "XRP": "ripple"}
 
-# ===== 底部按钮 - 2个 =====
+# ===== 底部按钮 =====
 def get_join_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💬 Join Discussion Group", url=CHAT_INVITE_LINK)],
@@ -126,22 +124,61 @@ def get_market_mood():
     except:
         return "Neutral - Market waiting for US macro data"
 
+# ===== V44: 价格 - 三重备份 =====
 def get_btc_price_line():
-    # V43: 改用 CoinGecko，Binance 在 Render 美国 IP 上会被墙
+    # 1. CoinGecko
     try:
         r = requests.get(
             "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true",
-            timeout=8
+            timeout=6
         ).json()
         price = r['bitcoin']['usd']
         change = r['bitcoin']['usd_24h_change']
         emoji = "🟢" if change >= 0 else "🔴"
         return f"{emoji} BTC ${price:,.0f} ({change:+.2f}% 24h)"
     except Exception as e:
-        print(f"BTC price failed: {e}")
+        print(f"CoinGecko BTC failed: {e}")
+
+    # 2. Coinbase - 美国本土，最稳
+    try:
+        r = requests.get("https://api.coinbase.com/v2/prices/BTC-USD/spot", timeout=6).json()
+        price = float(r['data']['amount'])
+        return f"🟢 BTC ${price:,.0f} (Coinbase Spot)"
+    except Exception as e:
+        print(f"Coinbase BTC failed: {e}")
+
+    # 3. Kraken - 兜底
+    try:
+        r = requests.get("https://api.kraken.com/0/public/Ticker?pair=XBTUSD", timeout=6).json()
+        price = float(r['result']['XXBTZUSD']['c'][0])
+        return f"🟢 BTC ${price:,.0f} (Kraken Spot)"
+    except Exception as e:
+        print(f"All price sources failed: {e}")
         return "BTC price unavailable"
 
-# ===== 模版 V43 - 已修重复 =====
+def get_coin_price(symbol):
+    """群里查价用：CoinGecko -> Coinbase"""
+    coin_id = COINS[symbol]
+    # 1. CoinGecko 带涨跌幅 + 高低点
+    try:
+        r = requests.get(
+            f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd&include_24hr_change=true&include_24hr_high_low=true&include_24hr_vol=true",
+            timeout=6
+        ).json()
+        d = r[coin_id]
+        return d['usd'], d.get('usd_24h_change', 0), d.get('usd_24h_high', 0), d.get('usd_24h_low', 0), d.get('usd_24h_vol', 0), "CoinGecko"
+    except Exception as e:
+        print(f"CoinGecko {symbol} failed: {e}")
+    # 2. Coinbase 兜底
+    try:
+        r = requests.get(f"https://api.coinbase.com/v2/prices/{symbol}-USD/spot", timeout=6).json()
+        price = float(r['data']['amount'])
+        return price, 0, 0, 0, 0, "Coinbase"
+    except Exception as e:
+        print(f"Coinbase {symbol} failed: {e}")
+    return None, 0, 0, 0, 0, ""
+
+# ===== 模版 V44 =====
 def format_breaking(news):
     return (
         f"🚨 <b>BREAKING</b>\n"
@@ -155,33 +192,28 @@ def format_breaking(news):
 def format_digest(news_list, date_str):
     if not news_list:
         return "No news today"
-
     top = news_list[0]
-    rest = news_list[1:6]  # V43 修复：从第2条开始，不再和 TOP STORY 重复
+    rest = news_list[1:6]
 
     text = f"<b>🇺🇸 US CRYPTO DIGEST | {date_str}</b>\n"
     text += f"Your daily 5-min US crypto briefing\n"
     text += "━━━━━━━━━━━━━━━━━━\n\n"
 
-    # TOP STORY
     text += f"🔥 <b>TOP STORY</b>\n"
     text += f"<b>{top['title']}</b>\n"
     text += f"{top['summary']}\n\n"
     text += "━━━━━━━━━━━━━━━━━━\n\n"
 
-    # TOP 5 - 实际是第 2-6 条
     text += f"📰 <b>TODAY'S TOP 5</b>\n\n"
     emojis = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣"]
     for i, n in enumerate(rest[:5]):
         text += f"{emojis[i]} <b>{n['title']}</b>\n{n['summary']}\n\n"
 
-    # MARKET
     text += "━━━━━━━━━━━━━━━━━━\n"
     text += f"📊 <b>MARKET SNAPSHOT</b>\n"
     text += f"{get_btc_price_line()}\n"
     text += f"🧭 {get_market_mood()}\n"
     text += f"💬 Send <code>BTC</code> / <code>ETH</code> / <code>SOL</code> in group for live price"
-
     return text
 
 # ===== 发送函数 =====
@@ -265,25 +297,20 @@ async def handle_group_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip().upper()
     if text in COINS:
         try:
-            # V43: 群里查价也换 CoinGecko，不再用 Binance
-            coin_id = COINS[text]
-            r = requests.get(
-                f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd&include_24hr_change=true&include_24hr_high_low=true&include_24hr_vol=true",
-                timeout=8
-            ).json()
-            d = r[coin_id]
-            price = d['usd']
-            change = d.get('usd_24h_change', 0)
-            high = d.get('usd_24h_high', 0)
-            low = d.get('usd_24h_low', 0)
-            vol = d.get('usd_24h_vol', 0)
+            price, change, high, low, vol, src = get_coin_price(text)
+            if price is None:
+                await update.message.reply_text(f"暂时查不到 {text} 价格")
+                return
             emoji = "🟢" if change >= 0 else "🔴"
-            await update.message.reply_text(
-                f"{emoji} {text}/USD: ${price:,.2f} ({change:+.2f}% 24h)\n\n"
-                f"24h High: ${high:,.2f}\n"
-                f"24h Low: ${low:,.2f}\n"
-                f"Volume: ${vol/1e6:.1f}M"
-            )
+            if src == "Coinbase":
+                await update.message.reply_text(f"{emoji} {text}/USD: ${price:,.2f} (Coinbase Spot)")
+            else:
+                await update.message.reply_text(
+                    f"{emoji} {text}/USD: ${price:,.2f} ({change:+.2f}% 24h)\n\n"
+                    f"24h High: ${high:,.2f}\n"
+                    f"24h Low: ${low:,.2f}\n"
+                    f"Volume: ${vol/1e6:.1f}M"
+                )
         except Exception as e:
             await update.message.reply_text(f"暂时查不到 {text} 价格")
             print(e)
@@ -301,7 +328,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_group_msg))
     if app.job_queue:
         app.job_queue.run_daily(send_digest, time=dtime(hour=14, minute=0), name="daily_digest")
-    print("Scheduler v43 US News + Fix Dup + CoinGecko - Final Channel")
+    print("Scheduler v44 US News + Triple Price Fallback - Final Channel")
     print(f"CHANNEL_ID={CHANNEL_ID} REPORT_CHAT_ID={REPORT_CHAT_ID}")
     app.run_polling(drop_pending_updates=True)
 
