@@ -29,9 +29,9 @@ threading.Thread(target=keep_alive, daemon=True).start()
 
 # ===== 配置 =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-# V45 新增：你的 Bot 用户名，不带 @，例如 USCryptoDigestBot
-# 在 Render Environment 里加 BOT_USERNAME=你的Bot用户名
-BOT_USERNAME = os.getenv("BOT_USERNAME", "USCryptoDigestBot")
+# V46: 已固定为你的真实 Bot，不用再去 Render 配 BOT_USERNAME 也能跳对
+# 如果以后换 Bot，改这里或在 Render 里配 BOT_USERNAME 覆盖都行
+BOT_USERNAME = os.getenv("BOT_USERNAME", "crypto_pixie_bot")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "-1004218958873"))
 REPORT_CHAT_ID = int(os.getenv("REPORT_CHAT_ID", "-1004490905842"))
 CHAT_INVITE_LINK = os.getenv("CHAT_INVITE_LINK", "https://t.me/+n3HjK18XQmk0NDhl")
@@ -46,7 +46,6 @@ RSS_FEEDS = [
 SENT_FILE = "sent_news.json"
 COINS = {"BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "DOGE": "dogecoin", "XRP": "ripple"}
 
-# 币种关键词，用于匹配相关新闻
 COIN_KEYWORDS = {
     "BTC": ["bitcoin", "btc"],
     "ETH": ["ethereum", "eth"],
@@ -55,15 +54,15 @@ COIN_KEYWORDS = {
     "XRP": ["xrp", "ripple"],
 }
 
-# ===== 底部按钮 V45 =====
+# ===== 底部按钮 V46 - 全英文 =====
 def get_bot_link():
-    # 点了直接跳到机器人私聊
-    return f"https://t.me/{BOT_USERNAME}"
+    username = BOT_USERNAME.strip() if BOT_USERNAME else "crypto_pixie_bot"
+    return f"https://t.me/{username}"
 
 def get_join_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💬 Join Discussion Group", url=CHAT_INVITE_LINK)],
-        [InlineKeyboardButton("🔍 查看更多加密货币详细信息", url=get_bot_link())],
+        [InlineKeyboardButton("🔍 View More Crypto Details", url=get_bot_link())],
     ])
 
 # ===== 防重复 + 24h =====
@@ -132,7 +131,6 @@ def fetch_us_news(limit=10):
     return uniq[:limit]
 
 def fetch_all_news_for_coin(limit=20):
-    """给币种详情用：不走 sent 去重，拿最新新闻来匹配"""
     all_news = []
     for source, url in RSS_FEEDS:
         try:
@@ -151,7 +149,6 @@ def fetch_all_news_for_coin(limit=20):
                 })
         except Exception as e:
             print(f"Feed failed {source}: {e}")
-    # 去重
     seen = set()
     uniq = []
     for n in all_news:
@@ -174,20 +171,19 @@ def get_fear_greed_value():
         r = requests.get("https://api.alternative.me/fng/?limit=1", timeout=5).json()
         v = int(r['data'][0]['value'])
         c = r['data'][0]['value_classification']
-        # 简单情绪解读
         if v <= 25:
-            tip = "市场极度恐慌，历史看往往是分批布局窗口"
+            tip = "Extreme fear - historically a accumulation window"
         elif v <= 45:
-            tip = "市场偏恐慌，谨慎追高"
+            tip = "Fear - avoid chasing highs"
         elif v <= 55:
-            tip = "市场中性，等待方向选择"
+            tip = "Neutral - waiting for direction"
         elif v <= 75:
-            tip = "市场偏贪婪，注意追高风险"
+            tip = "Greed - watch for overheating"
         else:
-            tip = "市场极度贪婪，注意回调风险"
+            tip = "Extreme greed - watch for pullback risk"
         return v, c, tip
     except:
-        return 50, "Neutral", "市场等待美国宏观数据"
+        return 50, "Neutral", "Market waiting for US macro data"
 
 # ===== 价格 - 三重备份 =====
 def get_btc_price_line():
@@ -235,20 +231,19 @@ def get_coin_price(symbol):
         print(f"Coinbase {symbol} failed: {e}")
     return None, 0, 0, 0, 0, ""
 
-# ===== V45: 币种详情 - 价格 + 贪婪指数 + 相关新闻 =====
+# ===== 币种详情 - 英文版 =====
 def format_coin_detail(symbol):
     price, change, high, low, vol, src = get_coin_price(symbol)
     if price is None:
-        return f"暂时查不到 {symbol} 价格，稍后再试"
+        return f"Price for {symbol} temporarily unavailable, please try again later"
 
     fg_value, fg_label, fg_tip = get_fear_greed_value()
     emoji = "🟢" if change >= 0 else "🔴" if change != 0 else "⚪"
-
     coin_name = {"BTC": "Bitcoin", "ETH": "Ethereum", "SOL": "Solana", "DOGE": "Dogecoin", "XRP": "XRP"}.get(symbol, symbol)
 
-    text = f"<b>🪙 {coin_name} ({symbol}) 详细信息</b>\n"
+    text = f"<b>🪙 {coin_name} ({symbol}) Details</b>\n"
     text += "━━━━━━━━━━━━━━━━━━\n\n"
-    text += f"📊 <b>价格</b>\n"
+    text += f"📊 <b>Price</b>\n"
     text += f"{emoji} ${price:,.2f}"
     if src != "Coinbase":
         text += f" ({change:+.2f}% 24h)"
@@ -261,13 +256,12 @@ def format_coin_detail(symbol):
     text += f"Source: {src}\n\n"
 
     text += "━━━━━━━━━━━━━━━━━━\n"
-    text += f"🧭 <b>贪婪指数 Fear & Greed</b>\n"
+    text += f"🧭 <b>Fear & Greed Index</b>\n"
     text += f"{fg_label} ({fg_value}/100)\n"
     text += f"{fg_tip}\n\n"
 
-    # 相关新闻
     text += "━━━━━━━━━━━━━━━━━━\n"
-    text += f"📰 <b>{symbol} 相关新闻</b>\n\n"
+    text += f"📰 <b>{symbol} Related News</b>\n\n"
     all_news = fetch_all_news_for_coin(30)
     keywords = COIN_KEYWORDS.get(symbol, [symbol.lower()])
     matched = []
@@ -278,18 +272,16 @@ def format_coin_detail(symbol):
             matched.append(n)
         if len(matched) >= 3:
             break
-
     if not matched:
-        # 没匹配到就给最新 3 条通用新闻
         matched = all_news[:3]
-        text += "暂无该币种专属新闻，看看最新市场动态：\n\n"
+        text += "No exclusive news for this coin, here are latest market updates:\n\n"
     for i, n in enumerate(matched, 1):
         text += f"{i}. <b>{n['title']}</b>\n"
         text += f"{n['summary'][:150]}...\n"
         text += f"Source: {n['source']} | {n['link']}\n\n"
 
     text += "━━━━━━━━━━━━━━━━━━\n"
-    text += "💬 继续发 <code>BTC</code> / <code>ETH</code> / <code>SOL</code> / <code>DOGE</code> / <code>XRP</code> 查看其他币种"
+    text += "💬 Send <code>BTC</code> / <code>ETH</code> / <code>SOL</code> / <code>DOGE</code> / <code>XRP</code> to check other coins"
     return text
 
 # ===== 模版 =====
@@ -327,7 +319,7 @@ def format_digest(news_list, date_str):
     text += f"📊 <b>MARKET SNAPSHOT</b>\n"
     text += f"{get_btc_price_line()}\n"
     text += f"🧭 {get_market_mood()}\n"
-    text += f"💬 点击下方按钮，在机器人里发币种查看详情"
+    text += f"💬 Tap below to check coin details in bot"
     return text
 
 # ===== 发送函数 =====
@@ -365,42 +357,42 @@ async def send_digest(context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🇺🇸 US Crypto News Bot\n\n"
-        "频道: Breaking + Daily Digest\n"
-        "群: 价格分析 + 讨论\n\n"
-        "直接发币种查看详情:\n"
+        "Channel: Breaking + Daily Digest\n"
+        "Group: Price + Discussion\n\n"
+        "Send coin to get details:\n"
         "BTC / ETH / SOL / DOGE / XRP\n\n"
-        "你会看到: 实时价格 + 贪婪指数 + 相关新闻\n\n"
-        "命令:\n"
-        "/digest - 立刻发一条 Digest 到频道\n"
-        "/breaking - 立刻发一条 Breaking 到频道\n"
-        "/news - 看最新 1 条新闻\n"
-        "/report - 手动发 Digest"
+        "You will get: Live Price + Fear & Greed + Related News\n\n"
+        "Commands:\n"
+        "/digest - Send Digest to channel now\n"
+        "/breaking - Send Breaking to channel now\n"
+        "/news - Latest news\n"
+        "/report - Manual Digest"
     )
 
 async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("正在检查 24h 内新新闻...")
+    await update.message.reply_text("Checking news in last 24h...")
     before = len(load_sent())
     await send_digest(context)
     after = len(load_sent())
     if after > before:
-        await update.message.reply_text("✅ Digest 已发到频道")
+        await update.message.reply_text("✅ Digest sent to channel")
     else:
-        await update.message.reply_text("24h 内没有新新闻，已跳过，没重复发")
+        await update.message.reply_text("No new news in 24h, skipped")
 
 async def cmd_breaking(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("正在检查新 Breaking...")
+    await update.message.reply_text("Checking new Breaking...")
     before = len(load_sent())
     await send_breaking(context)
     after = len(load_sent())
     if after > before:
-        await update.message.reply_text("✅ Breaking 已发到频道")
+        await update.message.reply_text("✅ Breaking sent to channel")
     else:
-        await update.message.reply_text("没有新 Breaking，已跳过，没重复发")
+        await update.message.reply_text("No new Breaking, skipped")
 
 async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     news_list = fetch_us_news(1)
     if not news_list:
-        await update.message.reply_text("24h 内没有新新闻")
+        await update.message.reply_text("No new news in 24h")
         return
     await update.message.reply_text(format_breaking(news_list[0]), parse_mode="HTML", reply_markup=get_join_keyboard())
 
@@ -411,9 +403,8 @@ async def handle_group_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
     text = update.message.text.strip().upper()
-    # 私聊 + 群里都支持
     if text in COINS:
-        await update.message.reply_text("正在查询详情...", disable_notification=True)
+        await update.message.reply_text("Checking details...", disable_notification=True)
         detail = format_coin_detail(text)
         await update.message.reply_text(detail, parse_mode="HTML", disable_web_page_preview=True)
 
@@ -430,8 +421,8 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_group_msg))
     if app.job_queue:
         app.job_queue.run_daily(send_digest, time=dtime(hour=14, minute=0), name="daily_digest")
-    print("Scheduler v45 US News + Coin Detail + Greed + News - Final Channel")
-    print(f"CHANNEL_ID={CHANNEL_ID} BOT_USERNAME={BOT_USERNAME}")
+    print("Scheduler v46 US News + crypto_pixie_bot - Final Channel")
+    print(f"CHANNEL_ID={CHANNEL_ID} BOT_USERNAME={BOT_USERNAME} BOT_LINK={get_bot_link()}")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
