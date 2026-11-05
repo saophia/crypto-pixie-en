@@ -8,7 +8,8 @@ from datetime import datetime, time as dtime
 from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, ChatMemberHandler
+from telegram.ext import ChatMemberHandler as CMH
 
 # ===== Render 保活 =====
 def keep_alive():
@@ -52,10 +53,22 @@ COIN_KEYWORDS = {
     "XRP": ["xrp", "ripple"],
 }
 
-# ===== 底部按钮 V47 - 带 start 参数 =====
+# ===== V48 新增：进频道欢迎文案 =====
+WHALE_WELCOME_TEXT = (
+    "🐋 Whale Chatroom – Precision Signals\n"
+    "📈 Daily offerings:\n"
+    "💎 3–5 high-precision trading signals—including entry points, stop-loss, and take-profit levels\n"
+    "💰 Market forecasts for BTC, ETH, TON, and other major cryptocurrencies\n"
+    "🔥 Latest news + in-depth analysis of capital movements by \"whales\" (large-scale investors)\n"
+    "📊 Elliott Wave analysis and personal trading reviews\n"
+    "No pointless chatter—just a focus on real, tangible gains.\n"
+    "👇 Click to join the \"Whale Chatroom\":\n"
+    "https://t.me/+n3HjKI8XQmk0NDhl"
+)
+
+# ===== 底部按钮 V47 =====
 def get_bot_link():
     username = BOT_USERNAME.strip() if BOT_USERNAME else "crypto_pixie_bot"
-    # V47: 带 from_channel 参数，Bot 能识别是从频道点进来的
     return f"https://t.me/{username}?start=from_channel"
 
 def get_join_keyboard():
@@ -230,7 +243,7 @@ def get_coin_price(symbol):
         print(f"Coinbase {symbol} failed: {e}")
     return None, 0, 0, 0, 0, ""
 
-# ===== 币种详情 - 英文版 =====
+# ===== 币种详情 =====
 def format_coin_detail(symbol):
     price, change, high, low, vol, src = get_coin_price(symbol)
     if price is None:
@@ -352,21 +365,67 @@ async def send_digest(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print(f"Digest FAILED: {e}")
 
-# ===== 命令 - V47: 从频道进来的自动提示 =====
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # context.args[0] 就是 ?start= 后面的参数
-    payload = context.args[0] if context.args else ""
+# ===== V48 新增：10分钟后自动删除 =====
+async def delete_welcome_msg(context: ContextTypes.DEFAULT_TYPE):
+    job = context.job
+    chat_id = job.data["chat_id"]
+    msg_id = job.data["message_id"]
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        print(f"Whale welcome deleted: {msg_id}")
+    except Exception as e:
+        print(f"Delete welcome failed: {e}")
 
+async def on_channel_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Telegram 的频道进人事件
+    if not update.chat_member:
+        return
+    cm = update.chat_member
+    # 只处理你的频道，不是群
+    if cm.chat.id != CHANNEL_ID:
+        return
+    # 新状态必须是 member，旧状态是 left / kicked，说明是新进来的
+    old_status = cm.old_chat_member.status
+    new_status = cm.new_chat_member.status
+    user = cm.new_chat_member.user
+
+    # 排除 Bot 自己被拉进频道的情况
+    if user.is_bot:
+        return
+    if new_status != "member":
+        return
+    if old_status not in ["left", "kicked"]:
+        return
+
+    print(f"New channel member: {user.username or user.id}")
+    try:
+        sent = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=WHALE_WELCOME_TEXT,
+            disable_web_page_preview=True
+        )
+        # 10分钟 = 600秒后自动删除
+        if context.job_queue:
+            context.job_queue.run_once(
+                delete_welcome_msg,
+                when=600,
+                data={"chat_id": CHANNEL_ID, "message_id": sent.message_id},
+                name=f"del_welcome_{sent.message_id}"
+            )
+        print(f"Whale welcome sent: {sent.message_id}, will delete in 10min")
+    except Exception as e:
+        print(f"Whale welcome FAILED: {e}")
+
+# ===== 命令 =====
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    payload = context.args[0] if context.args else ""
     if payload == "from_channel":
-        # 从频道点按钮进来的用户，只发这一句提示语 + 欢迎语
         await update.message.reply_text(
             "👋 Welcome to Crypto Pixie Bot!\n\n"
             "💬 Send <code>BTC</code> / <code>ETH</code> / <code>SOL</code> / <code>DOGE</code> / <code>XRP</code> to check other coins",
             parse_mode="HTML"
         )
         return
-
-    # 正常直接搜到 Bot 进来的
     await update.message.reply_text(
         "🇺🇸 US Crypto News Bot\n\n"
         "Channel: Breaking + Daily Digest\n"
@@ -411,6 +470,16 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await cmd_digest(update, context)
 
+# 测试用：手动发一条 Whale 欢迎，验证 10 分钟删除
+async def cmd_test_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        sent = await context.bot.send_message(chat_id=CHANNEL_ID, text=WHALE_WELCOME_TEXT, disable_web_page_preview=True)
+        if context.job_queue:
+            context.job_queue.run_once(delete_welcome_msg, when=600, data={"chat_id": CHANNEL_ID, "message_id": sent.message_id}, name=f"del_welcome_{sent.message_id}")
+        await update.message.reply_text("✅ Whale welcome 已发到频道，10分钟后自动删除")
+    except Exception as e:
+        await update.message.reply_text(f"发送失败: {e}")
+
 async def handle_group_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
@@ -430,12 +499,15 @@ def main():
     app.add_handler(CommandHandler("breaking", cmd_breaking))
     app.add_handler(CommandHandler("news", cmd_news))
     app.add_handler(CommandHandler("report", cmd_report))
+    app.add_handler(CommandHandler("testwelcome", cmd_test_welcome))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_group_msg))
+    # V48 新增：监听进频道事件
+    app.add_handler(CMH(on_channel_join, CMH.CHAT_MEMBER))
     if app.job_queue:
         app.job_queue.run_daily(send_digest, time=dtime(hour=14, minute=0), name="daily_digest")
-    print("Scheduler v47 US News + Auto Welcome from Channel - Final Channel")
+    print("Scheduler v48 US News + Whale Welcome 10min Auto-Delete - Final Channel")
     print(f"CHANNEL_ID={CHANNEL_ID} BOT_USERNAME={BOT_USERNAME} BOT_LINK={get_bot_link()}")
-    app.run_polling(drop_pending_updates=True)
+    app.run_polling(drop_pending_updates=True, allowed_updates=["message", "chat_member", "my_chat_member"])
 
 if __name__ == "__main__":
     main()
