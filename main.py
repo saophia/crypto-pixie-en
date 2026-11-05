@@ -26,7 +26,6 @@ def _keep_alive():
 threading.Thread(target=_keep_alive, daemon=True).start()
 
 def fetch_news(limit=5):
-    """Fetch latest crypto news from CoinDesk RSS"""
     try:
         url = "https://www.coindesk.com/arc/outboundfeeds/rss/"
         r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
@@ -35,27 +34,73 @@ def fetch_news(limit=5):
         for item in root.findall(".//item")[:limit]:
             title = item.findtext("title", "").strip()
             link = item.findtext("link", "").strip()
+            desc = item.findtext("description", "").strip()
+            # Clean description - remove html tags
+            import re
+            desc = re.sub(r"<[^>]+>", "", desc).strip()
+            if len(desc) > 120:
+                desc = desc[:120] + "..."
+            image = None
+            for child in item:
+                tag = child.tag.lower()
+                if "content" in tag or "thumbnail" in tag or "enclosure" in tag:
+                    image = child.get("url") or child.get("href")
+                    if image:
+                        break
+            if not image:
+                enc = item.find("enclosure")
+                if enc is not None:
+                    image = enc.get("url")
             if title and link:
-                items.append((title, link))
+                items.append({"title": title, "link": link, "desc": desc, "image": image})
         return items
     except Exception as e:
         print(f"News fetch error: {e}")
         return []
 
+async def send_news_messages(bot, chat_id):
+    news = fetch_news(5)
+    if not news:
+        await bot.send_message(chat_id=chat_id, text="Failed to fetch news, try again later.")
+        return
+
+    # --- STYLE C: MAGAZINE ---
+    # Header
+    await bot.send_message(chat_id=chat_id, text="📰 <b>CRYPTO DAILY NEWS</b>\n━━━━━━━━━━━━━━━", parse_mode="HTML")
+
+    # 1. BIG COVER - Headline
+    head = news[0]
+    head_caption = (
+        f"🔥 <b>TOP STORY</b>\n\n"
+        f"<b>{head['title']}</b>\n\n"
+        f"{head['desc']}\n\n"
+        f"👉 <a href=\"{head['link']}\">Read Full Article →</a>"
+    )
+    try:
+        if head["image"]:
+            await bot.send_photo(chat_id=chat_id, photo=head["image"], caption=head_caption, parse_mode="HTML")
+        else:
+            await bot.send_message(chat_id=chat_id, text=head_caption, parse_mode="HTML", disable_web_page_preview=True)
+    except Exception as e:
+        print(f"Head photo failed: {e}")
+        await bot.send_message(chat_id=chat_id, text=head_caption, parse_mode="HTML", disable_web_page_preview=True)
+
+    # 2. 4 SMALL NEWS BELOW
+    small_text = "🗞️ <b>MORE STORIES</b>\n━━━━━━━━━━━━━━━\n\n"
+    emojis = ["📈", "🏛️", "💰", "🌐"]
+    for i, n in enumerate(news[1:5]):
+        emoji = emojis[i] if i < len(emojis) else "•"
+        small_text += f"{emoji} <b>{n['title']}</b>\n"
+        small_text += f"<a href=\"{n['link']}\">Read →</a>\n\n"
+    small_text += "━━━━━━━━━━━━━━━\n— Crypto Pixie ✨"
+    await bot.send_message(chat_id=chat_id, text=small_text, parse_mode="HTML", disable_web_page_preview=True)
+
 async def send_daily_news(bot):
     if not CHANNEL_ID:
         print("CHANNEL_ID not set, skip news")
         return
-    news = fetch_news(5)
-    if not news:
-        print("No news fetched")
-        return
-    text = "📰 **Crypto Daily News**\n\n"
-    for i, (title, link) in enumerate(news, 1):
-        text += f"{i}. [{title}]({link})\n\n"
-    text += "— Crypto Pixie ✨"
     try:
-        await bot.send_message(chat_id=CHANNEL_ID, text=text, parse_mode="Markdown", disable_web_page_preview=False)
+        await send_news_messages(bot, CHANNEL_ID)
         print("News sent!")
     except Exception as e:
         print(f"Send news failed: {e}")
@@ -90,15 +135,7 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def news_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Fetching latest news...")
-    news = fetch_news(5)
-    if not news:
-        await update.message.reply_text("Failed to fetch news, try again later.")
-        return
-    text = "📰 **Crypto Daily News**\n\n"
-    for i, (title, link) in enumerate(news, 1):
-        text += f"{i}. [{title}]({link})\n\n"
-    text += "— Crypto Pixie ✨"
-    await update.message.reply_text(text, parse_mode="Markdown", disable_web_page_preview=False)
+    await send_news_messages(context.bot, update.effective_chat.id)
 
 async def send_to_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not CHANNEL_ID:
@@ -125,12 +162,11 @@ async def test_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Failed: {e}\nCheck bot is admin in channel.")
 
 async def post_init(app):
-    # Scheduler: US Eastern Time 7AM & 7PM daily
     scheduler = AsyncIOScheduler(timezone=pytz.timezone("America/New_York"))
     scheduler.add_job(send_daily_news, CronTrigger(hour=7, minute=0), args=[app.bot])
     scheduler.add_job(send_daily_news, CronTrigger(hour=19, minute=0), args=[app.bot])
     scheduler.start()
-    print("Scheduler started: 7AM & 7PM ET daily news")
+    print("Scheduler started: 7AM & 7PM ET daily news - Style C Magazine")
 
 if __name__ == "__main__":
     if not BOT_TOKEN:
