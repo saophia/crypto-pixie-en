@@ -6,6 +6,7 @@ import feedparser
 import requests
 import threading
 from datetime import datetime, time as dtime
+from zoneinfo import ZoneInfo
 from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -35,6 +36,9 @@ BOT_USERNAME = os.getenv("BOT_USERNAME", "crypto_pixie_bot")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "-1004218958873"))
 REPORT_CHAT_ID = int(os.getenv("REPORT_CHAT_ID", "-1004490905842"))
 CHAT_INVITE_LINK = os.getenv("CHAT_INVITE_LINK", "https://t.me/+n3HjK18XQmk0NDhl")
+
+# 美国东部时区 - 自动处理夏令时 EDT / EST
+EASTERN = ZoneInfo("America/New_York")
 
 RSS_FEEDS = [
     ("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
@@ -407,7 +411,7 @@ async def send_digest(context: ContextTypes.DEFAULT_TYPE):
     if not news_list:
         print("Digest: 24h 内没有新新闻，跳过")
         return
-    date_str = datetime.now().strftime("%b %d")
+    date_str = datetime.now(EASTERN).strftime("%b %d")
     text = format_digest(news_list, date_str)
     try:
         await context.bot.send_message(chat_id=CHANNEL_ID, text=text, parse_mode="HTML", reply_markup=get_join_keyboard(), disable_web_page_preview=True)
@@ -549,8 +553,9 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_group_msg))
     app.add_handler(CMH(on_channel_join, CMH.CHAT_MEMBER))
     if app.job_queue:
-        app.job_queue.run_daily(send_digest, time=dtime(hour=14, minute=0), name="daily_digest")
-    print("Scheduler v51 US News + Whale Welcome + Upstash Dedup - Final Channel")
+        # 固定美国东部时间每天 10:00 自动发 Digest，自动处理夏令时
+        app.job_queue.run_daily(send_digest, time=dtime(hour=10, minute=0, tzinfo=EASTERN), name="daily_digest")
+    print("Scheduler v52 US News + Whale Welcome + Upstash Dedup + ET 10AM - Final Channel")
     print(f"CHANNEL_ID={CHANNEL_ID} BOT_USERNAME={BOT_USERNAME} BOT_LINK={get_bot_link()}")
     app.run_polling(drop_pending_updates=True, allowed_updates=["message", "chat_member", "my_chat_member"])
 
