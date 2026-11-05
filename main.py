@@ -53,25 +53,25 @@ COIN_KEYWORDS = {
     "XRP": ["xrp", "ripple"],
 }
 
-# ===== V49: 进频道欢迎 - 简洁版 =====
+# ===== V50: 进频道欢迎 - 纯英文 + 按钮向右 =====
 WHALE_WELCOME_TEXT = (
     "<b>🐋 WHALE CHATROOM</b>\n"
     "<i>Where Smart Money Moves First</i>\n"
     "━━━━━━━━━━━━━━━━━━\n\n"
-    "每天只做 3 件事：\n\n"
+    "We do only 3 things daily:\n\n"
     "<b>1. 💎 3-5 Precision Signals</b>\n"
-    "Entry • Stop-Loss • Take-Profit，直接跟\n\n"
+    "Entry • Stop-Loss • Take-Profit, ready to follow\n\n"
     "<b>2. 🔥 Whale Moves Tracking</b>\n"
-    "鲸鱼在买什么 / 卖什么，第一时间告诉你\n\n"
-    "<b>3. 📊 Elliott Wave + 复盘</b>\n"
-    "不只告诉你涨跌，告诉你为什么\n\n"
+    "What whales are buying / selling, in real time\n\n"
+    "<b>3. 📊 Elliott Wave + Review</b>\n"
+    "Not just what moves, but why it moves\n\n"
     "━━━━━━━━━━━━━━━━━━\n"
-    "不水群，不喊单，不画饼。"
+    "<b>No noise. No hype. Just real edge.</b>"
 )
 
 def get_whale_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("👇 Join Whale Chatroom", url="https://t.me/+n3HjKI8XQmk0NDhl")],
+        [InlineKeyboardButton("➡️ Join Whale Chatroom", url="https://t.me/+n3HjKI8XQmk0NDhl")],
         [InlineKeyboardButton("🔍 View More Crypto Details", url=get_bot_link())],
     ])
 
@@ -507,7 +507,7 @@ def main():
     app.add_handler(CMH(on_channel_join, CMH.CHAT_MEMBER))
     if app.job_queue:
         app.job_queue.run_daily(send_digest, time=dtime(hour=14, minute=0), name="daily_digest")
-    print("Scheduler v49 US News + Whale Welcome Concise - Final Channel")
+    print("Scheduler v50 US News + Whale Welcome Pure English - Final Channel")
     print(f"CHANNEL_ID={CHANNEL_ID} BOT_USERNAME={BOT_USERNAME} BOT_LINK={get_bot_link()}")
     app.run_polling(drop_pending_updates=True, allowed_updates=["message", "chat_member", "my_chat_member"])
 
