@@ -2,6 +2,7 @@ import os
 import re
 import json
 import hashlib
+import asyncio
 import feedparser
 import requests
 import threading
@@ -37,7 +38,6 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID", "-1004218958873"))
 REPORT_CHAT_ID = int(os.getenv("REPORT_CHAT_ID", "-1004490905842"))
 CHAT_INVITE_LINK = os.getenv("CHAT_INVITE_LINK", "https://t.me/+n3HjK18XQmk0NDhl")
 
-# 美国东部时区 - 自动处理夏令时 EDT / EST
 EASTERN = ZoneInfo("America/New_York")
 
 RSS_FEEDS = [
@@ -57,7 +57,7 @@ COIN_KEYWORDS = {
     "XRP": ["xrp", "ripple"],
 }
 
-# ===== V51: 去重 - Upstash Redis (免费版永久去重) =====
+# ===== V51: 去重 - Upstash Redis =====
 UPSTASH_URL = os.getenv("UPSTASH_REDIS_REST_URL", "")
 UPSTASH_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN", "")
 _SENT_CACHE = set()
@@ -116,7 +116,7 @@ def save_sent(title):
     except Exception as e:
         print(f"Save sent failed: {e}")
 
-# ===== V50: 进频道欢迎 - 纯英文 + 按钮向右 =====
+# ===== 欢迎文案 =====
 WHALE_WELCOME_TEXT = (
     "<b>🐋 WHALE CHATROOM</b>\n"
     "<i>Where Smart Money Moves First</i>\n"
@@ -138,7 +138,6 @@ def get_whale_keyboard():
         [InlineKeyboardButton("🔍 View More Crypto Details", url=get_bot_link())],
     ])
 
-# ===== 底部按钮 =====
 def get_bot_link():
     username = BOT_USERNAME.strip() if BOT_USERNAME else "crypto_pixie_bot"
     return f"https://t.me/{username}?start=from_channel"
@@ -149,7 +148,6 @@ def get_join_keyboard():
         [InlineKeyboardButton("🔍 View More Crypto Details", url=get_bot_link())],
     ])
 
-# ===== 24h 新鲜度 =====
 def is_fresh(published_str):
     if not published_str:
         return True
@@ -253,7 +251,6 @@ def get_fear_greed_value():
     except:
         return 50, "Neutral", "Market waiting for US macro data"
 
-# ===== 价格 - 三重备份 =====
 def get_btc_price_line():
     try:
         r = requests.get(
@@ -299,16 +296,13 @@ def get_coin_price(symbol):
         print(f"Coinbase {symbol} failed: {e}")
     return None, 0, 0, 0, 0, ""
 
-# ===== 币种详情 =====
 def format_coin_detail(symbol):
     price, change, high, low, vol, src = get_coin_price(symbol)
     if price is None:
         return f"Price for {symbol} temporarily unavailable, please try again later"
-
     fg_value, fg_label, fg_tip = get_fear_greed_value()
     emoji = "🟢" if change >= 0 else "🔴" if change != 0 else "⚪"
     coin_name = {"BTC": "Bitcoin", "ETH": "Ethereum", "SOL": "Solana", "DOGE": "Dogecoin", "XRP": "XRP"}.get(symbol, symbol)
-
     text = f"<b>🪙 {coin_name} ({symbol}) Details</b>\n"
     text += "━━━━━━━━━━━━━━━━━━\n\n"
     text += f"📊 <b>Price</b>\n"
@@ -322,12 +316,10 @@ def format_coin_detail(symbol):
     if vol:
         text += f"24h Volume: ${vol/1e6:.1f}M\n"
     text += f"Source: {src}\n\n"
-
     text += "━━━━━━━━━━━━━━━━━━\n"
     text += f"🧭 <b>Fear & Greed Index</b>\n"
     text += f"{fg_label} ({fg_value}/100)\n"
     text += f"{fg_tip}\n\n"
-
     text += "━━━━━━━━━━━━━━━━━━\n"
     text += f"📰 <b>{symbol} Related News</b>\n\n"
     all_news = fetch_all_news_for_coin(30)
@@ -347,12 +339,10 @@ def format_coin_detail(symbol):
         text += f"{i}. <b>{n['title']}</b>\n"
         text += f"{n['summary'][:150]}...\n"
         text += f"Source: {n['source']} | {n['link']}\n\n"
-
     text += "━━━━━━━━━━━━━━━━━━\n"
     text += "💬 Send <code>BTC</code> / <code>ETH</code> / <code>SOL</code> / <code>DOGE</code> / <code>XRP</code> to check other coins"
     return text
 
-# ===== 模版 =====
 def format_breaking(news):
     return (
         f"🚨 <b>BREAKING</b>\n"
@@ -368,21 +358,17 @@ def format_digest(news_list, date_str):
         return "No news today"
     top = news_list[0]
     rest = news_list[1:6]
-
     text = f"<b>🇺🇸 US CRYPTO DIGEST | {date_str}</b>\n"
     text += f"Your daily 5-min US crypto briefing\n"
     text += "━━━━━━━━━━━━━━━━━━\n\n"
-
     text += f"🔥 <b>TOP STORY</b>\n"
     text += f"<b>{top['title']}</b>\n"
     text += f"{top['summary']}\n\n"
     text += "━━━━━━━━━━━━━━━━━━\n\n"
-
     text += f"📰 <b>TODAY'S TOP 5</b>\n\n"
     emojis = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣"]
     for i, n in enumerate(rest[:5]):
         text += f"{emojis[i]} <b>{n['title']}</b>\n{n['summary']}\n\n"
-
     text += "━━━━━━━━━━━━━━━━━━\n"
     text += f"📊 <b>MARKET SNAPSHOT</b>\n"
     text += f"{get_btc_price_line()}\n"
@@ -390,7 +376,6 @@ def format_digest(news_list, date_str):
     text += f"💬 Tap below to check coin details in bot"
     return text
 
-# ===== 发送函数 =====
 async def send_breaking(context: ContextTypes.DEFAULT_TYPE, news=None):
     if not news:
         news_list = fetch_us_news(1)
@@ -421,16 +406,23 @@ async def send_digest(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print(f"Digest FAILED: {e}")
 
-# ===== 10分钟后自动删除 =====
-async def delete_welcome_msg(context: ContextTypes.DEFAULT_TYPE):
-    job = context.job
-    chat_id = job.data["chat_id"]
-    msg_id = job.data["message_id"]
+# ===== V53 FIX: 不依赖 job_queue，用 asyncio 定时删除 =====
+async def _delete_after_delay(bot, chat_id, message_id, delay=600):
     try:
-        await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-        print(f"Whale welcome deleted: {msg_id}")
+        await asyncio.sleep(delay)
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        print(f"Whale welcome deleted: {message_id} after {delay}s")
     except Exception as e:
-        print(f"Delete welcome failed: {e}")
+        print(f"Delete welcome failed: {message_id} - {e} - Check bot is admin with Delete Messages permission")
+
+def schedule_delete(context, chat_id, message_id, delay=600):
+    # 不用 job_queue，直接创建 asyncio 任务，保证一定执行
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_delete_after_delay(context.bot, chat_id, message_id, delay))
+        print(f"Scheduled delete: {message_id} in {delay}s via asyncio")
+    except Exception as e:
+        print(f"Schedule delete failed: {e}")
 
 async def on_channel_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.chat_member:
@@ -456,13 +448,7 @@ async def on_channel_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_whale_keyboard(),
             disable_web_page_preview=True
         )
-        if context.job_queue:
-            context.job_queue.run_once(
-                delete_welcome_msg,
-                when=600,
-                data={"chat_id": CHANNEL_ID, "message_id": sent.message_id},
-                name=f"del_welcome_{sent.message_id}"
-            )
+        schedule_delete(context, CHANNEL_ID, sent.message_id, 600)
         print(f"Whale welcome sent: {sent.message_id}, will delete in 10min")
     except Exception as e:
         print(f"Whale welcome FAILED: {e}")
@@ -524,8 +510,7 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_test_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         sent = await context.bot.send_message(chat_id=CHANNEL_ID, text=WHALE_WELCOME_TEXT, parse_mode="HTML", reply_markup=get_whale_keyboard(), disable_web_page_preview=True)
-        if context.job_queue:
-            context.job_queue.run_once(delete_welcome_msg, when=600, data={"chat_id": CHANNEL_ID, "message_id": sent.message_id}, name=f"del_welcome_{sent.message_id}")
+        schedule_delete(context, CHANNEL_ID, sent.message_id, 600)
         await update.message.reply_text("✅ Whale welcome 已发到频道，10分钟后自动删除")
     except Exception as e:
         await update.message.reply_text(f"发送失败: {e}")
@@ -553,9 +538,11 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_group_msg))
     app.add_handler(CMH(on_channel_join, CMH.CHAT_MEMBER))
     if app.job_queue:
-        # 固定美国东部时间每天 10:00 自动发 Digest，自动处理夏令时
         app.job_queue.run_daily(send_digest, time=dtime(hour=10, minute=0, tzinfo=EASTERN), name="daily_digest")
-    print("Scheduler v52 US News + Whale Welcome + Upstash Dedup + ET 10AM - Final Channel")
+        print("JobQueue OK - Daily Digest scheduled ET 10:00")
+    else:
+        print("WARNING: JobQueue is None! Daily Digest will NOT auto-send. Fix requirements.txt to python-telegram-bot[job-queue]==20.7")
+    print("Scheduler v53 US News + Whale Welcome + Upstash Dedup + ET 10AM + Async Delete Fix - Final Channel")
     print(f"CHANNEL_ID={CHANNEL_ID} BOT_USERNAME={BOT_USERNAME} BOT_LINK={get_bot_link()}")
     app.run_polling(drop_pending_updates=True, allowed_updates=["message", "chat_member", "my_chat_member"])
 
