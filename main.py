@@ -151,11 +151,10 @@ def get_join_keyboard():
         [InlineKeyboardButton("🔍 View More Crypto Details", url=get_bot_link())],
     ])
 
-# ===== V55.1 NEW: Start 欢迎语按钮 - 链接藏按钮里 =====
+# ===== V55.4: Start 下面只留鲸鱼按钮 =====
 def get_start_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🐋 Join Whale Chatroom", url="https://t.me/+n3HjKI8XQmk0NDhl")],
-        [InlineKeyboardButton("💬 Join Discussion Group", url=CHAT_INVITE_LINK)],
     ])
 
 def is_fresh(published_str):
@@ -176,6 +175,40 @@ def clean_html(text):
     text = text.replace("<", "").replace(">", "")
     return text.strip()[:280]
 
+# ===== V55.3 NEW: 从 RSS 里取新闻配图 =====
+def get_entry_image(entry):
+    try:
+        media = getattr(entry, 'media_content', None)
+        if media and len(media) > 0:
+            url = media[0].get('url', '')
+            if url.startswith('http'):
+                return url
+    except:
+        pass
+    try:
+        thumb = getattr(entry, 'media_thumbnail', None)
+        if thumb and len(thumb) > 0:
+            url = thumb[0].get('url', '')
+            if url.startswith('http'):
+                return url
+    except:
+        pass
+    try:
+        enc = getattr(entry, 'enclosures', None)
+        if enc and len(enc) > 0:
+            url = enc[0].get('href', '') or enc[0].get('url', '')
+            if url.startswith('http') and any(x in url.lower() for x in ['.jpg', '.jpeg', '.png', '.webp']):
+                return url
+    except:
+        pass
+    try:
+        for l in getattr(entry, 'links', []):
+            if l.get('type', '').startswith('image/'):
+                return l.get('href', '')
+    except:
+        pass
+    return ""
+
 def fetch_us_news(limit=10):
     all_news = []
     sent = load_sent()
@@ -194,7 +227,8 @@ def fetch_us_news(limit=10):
                     "summary": clean_html(getattr(entry, 'summary', '') or getattr(entry, 'description', '')),
                     "link": entry.link,
                     "source": source,
-                    "published": published
+                    "published": published,
+                    "image": get_entry_image(entry)
                 })
         except Exception as e:
             print(f"Feed failed {source}: {e}")
@@ -221,7 +255,8 @@ def fetch_all_news_for_coin(limit=20):
                     "summary": clean_html(getattr(entry, 'summary', '') or getattr(entry, 'description', '')),
                     "link": entry.link,
                     "source": source,
-                    "published": published
+                    "published": published,
+                    "image": get_entry_image(entry)
                 })
         except Exception as e:
             print(f"Feed failed {source}: {e}")
@@ -386,6 +421,7 @@ def format_digest(news_list, date_str):
     text += f"💬 Tap below to check coin details in bot"
     return text
 
+# ===== V55.3: Breaking 带图, 没图兜底文字 =====
 async def send_breaking(context: ContextTypes.DEFAULT_TYPE, news=None):
     if not news:
         news_list = fetch_us_news(1)
@@ -395,12 +431,28 @@ async def send_breaking(context: ContextTypes.DEFAULT_TYPE, news=None):
         news = news_list[0]
     text = format_breaking(news)
     try:
-        await context.bot.send_message(chat_id=CHANNEL_ID, text=text, parse_mode="HTML", reply_markup=get_join_keyboard(), disable_web_page_preview=True)
+        image_url = news.get('image', '')
+        if image_url:
+            await context.bot.send_photo(
+                chat_id=CHANNEL_ID,
+                photo=image_url,
+                caption=text,
+                parse_mode="HTML",
+                reply_markup=get_join_keyboard()
+            )
+        else:
+            await context.bot.send_message(chat_id=CHANNEL_ID, text=text, parse_mode="HTML", reply_markup=get_join_keyboard(), disable_web_page_preview=True)
         save_sent(news['title'])
-        print(f"Breaking sent: {news['title']}")
+        print(f"Breaking sent: {news['title']} image={bool(image_url)}")
     except Exception as e:
-        print(f"Breaking FAILED: {e}")
+        print(f"Breaking photo FAILED: {e} - fallback to text")
+        try:
+            await context.bot.send_message(chat_id=CHANNEL_ID, text=text, parse_mode="HTML", reply_markup=get_join_keyboard(), disable_web_page_preview=True)
+            save_sent(news['title'])
+        except Exception as e2:
+            print(f"Breaking text fallback FAILED: {e2}")
 
+# ===== V55.3: Digest 带图 - 先发 Top Story 大图, 再发全文 =====
 async def send_digest(context: ContextTypes.DEFAULT_TYPE):
     news_list = fetch_us_news(8)
     if not news_list:
@@ -409,19 +461,40 @@ async def send_digest(context: ContextTypes.DEFAULT_TYPE):
     date_str = datetime.now(EASTERN).strftime("%b %d")
     text = format_digest(news_list, date_str)
     try:
+        top = news_list[0]
+        image_url = top.get('image', '')
+        if image_url:
+            photo_caption = (
+                f"<b>🇺🇸 US CRYPTO DIGEST | {date_str}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━\n\n"
+                f"🔥 <b>TOP STORY</b>\n"
+                f"<b>{top['title']}</b>\n\n"
+                f"{top['summary']}"
+            )
+            if len(photo_caption) > 1000:
+                photo_caption = photo_caption[:1000]
+            try:
+                await context.bot.send_photo(
+                    chat_id=CHANNEL_ID,
+                    photo=image_url,
+                    caption=photo_caption,
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                print(f"Digest photo FAILED: {e}, continue to send text only")
         await context.bot.send_message(chat_id=CHANNEL_ID, text=text, parse_mode="HTML", reply_markup=get_join_keyboard(), disable_web_page_preview=True)
         for n in news_list[:6]:
             save_sent(n['title'])
-        print(f"Digest sent: {len(news_list)} news")
+        print(f"Digest sent: {len(news_list)} news image={bool(image_url)}")
     except Exception as e:
         print(f"Digest FAILED: {e}")
 
-# ===== V55 NEW: 自动 Breaking 定时任务 =====
+# ===== V55: 自动 Breaking 定时任务 =====
 async def auto_breaking_job(context: ContextTypes.DEFAULT_TYPE):
     print("Auto Breaking check...")
     await send_breaking(context)
 
-# ===== V53 FIX: 不依赖 job_queue，用 asyncio 定时删除 =====
+# ===== V53 FIX: 不依赖 job_queue, 用 asyncio 定时删除 =====
 async def _delete_after_delay(bot, chat_id, message_id, delay=600):
     try:
         await asyncio.sleep(delay)
@@ -477,7 +550,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML"
         )
         return
-    # V55.1: 1号 - 直接搜到 Bot 点进来 - Whale 引流版, 链接藏按钮里
+    # V55.4: 1号 - 直接搜到 Bot 点进来 - Whale 引流版, 只留鲸鱼按钮
     await update.message.reply_text(
         "🐋 <b>Whale Chatroom — Precision Trading Signals</b>\n\n"
         "📈 <b>Daily offerings:</b>\n"
@@ -515,7 +588,15 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not news_list:
         await update.message.reply_text("No new news in 24h")
         return
-    await update.message.reply_text(format_breaking(news_list[0]), parse_mode="HTML", reply_markup=get_join_keyboard())
+    n = news_list[0]
+    text = format_breaking(n)
+    try:
+        if n.get('image'):
+            await update.message.reply_photo(photo=n['image'], caption=text, parse_mode="HTML", reply_markup=get_join_keyboard())
+        else:
+            await update.message.reply_text(text, parse_mode="HTML", reply_markup=get_join_keyboard())
+    except:
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=get_join_keyboard())
 
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await cmd_digest(update, context)
@@ -552,12 +633,12 @@ def main():
     app.add_handler(CMH(on_channel_join, CMH.CHAT_MEMBER))
     if app.job_queue:
         app.job_queue.run_daily(send_digest, time=dtime(hour=10, minute=0, tzinfo=EASTERN), name="daily_digest")
-        # V55: 每 30 分钟自动检查 Breaking, 第一次 60 秒后执行
-        app.job_queue.run_repeating(auto_breaking_job, interval=1800, first=60, name="auto_breaking")
-        print("JobQueue OK - Daily Digest scheduled ET 10:00 + Auto Breaking every 30min")
+        # V55.3: 每 4 小时自动检查 Breaking, 第一次 60 秒后执行
+        app.job_queue.run_repeating(auto_breaking_job, interval=14400, first=60, name="auto_breaking")
+        print("JobQueue OK - Daily Digest scheduled ET 10:00 + Auto Breaking every 4h")
     else:
         print("WARNING: JobQueue is None! Daily Digest will NOT auto-send. Fix requirements.txt to python-telegram-bot[job-queue]==20.7")
-    print("Scheduler v55.1 US News + Whale Welcome + Upstash Dedup + ET 10AM + Async Delete + HEAD Fix + Auto Breaking + Start Whale")
+    print("Scheduler v55.4 US News + Whale Welcome + Upstash Dedup + ET 10AM + Async Delete + HEAD Fix + Auto Breaking 4h + News With Image + Start Whale Single Button")
     print(f"CHANNEL_ID={CHANNEL_ID} BOT_USERNAME={BOT_USERNAME} BOT_LINK={get_bot_link()}")
     app.run_polling(drop_pending_updates=True, allowed_updates=["message", "chat_member", "my_chat_member"])
 
