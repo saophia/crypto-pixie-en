@@ -151,6 +151,13 @@ def get_join_keyboard():
         [InlineKeyboardButton("🔍 View More Crypto Details", url=get_bot_link())],
     ])
 
+# ===== V55.1 NEW: Start 欢迎语按钮 - 链接藏按钮里 =====
+def get_start_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🐋 Join Whale Chatroom", url="https://t.me/+n3HjKI8XQmk0NDhl")],
+        [InlineKeyboardButton("💬 Join Discussion Group", url=CHAT_INVITE_LINK)],
+    ])
+
 def is_fresh(published_str):
     if not published_str:
         return True
@@ -409,6 +416,11 @@ async def send_digest(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print(f"Digest FAILED: {e}")
 
+# ===== V55 NEW: 自动 Breaking 定时任务 =====
+async def auto_breaking_job(context: ContextTypes.DEFAULT_TYPE):
+    print("Auto Breaking check...")
+    await send_breaking(context)
+
 # ===== V53 FIX: 不依赖 job_queue，用 asyncio 定时删除 =====
 async def _delete_after_delay(bot, chat_id, message_id, delay=600):
     try:
@@ -465,18 +477,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML"
         )
         return
+    # V55.1: 1号 - 直接搜到 Bot 点进来 - Whale 引流版, 链接藏按钮里
     await update.message.reply_text(
-        "🇺🇸 US Crypto News Bot\n\n"
-        "Channel: Breaking + Daily Digest\n"
-        "Group: Price + Discussion\n\n"
-        "Send coin to get details:\n"
-        "BTC / ETH / SOL / DOGE / XRP\n\n"
-        "You will get: Live Price + Fear & Greed + Related News\n\n"
-        "Commands:\n"
-        "/digest - Send Digest to channel now\n"
-        "/breaking - Send Breaking to channel now\n"
-        "/news - Latest news\n"
-        "/report - Manual Digest"
+        "🐋 <b>Whale Chatroom — Precision Trading Signals</b>\n\n"
+        "📈 <b>Daily offerings:</b>\n"
+        "💎 3–5 high-precision trading signals, including entry, stop-loss, and take-profit levels\n"
+        "💰 Market forecasts for BTC, ETH, SOL, and other major cryptocurrencies\n"
+        "🔥 Latest market developments + tracking of \"whale\" (large-capital) movements\n"
+        "📊 Elliott Wave analysis and reviews of your own trades\n\n"
+        "No small talk — just actionable insights.",
+        parse_mode="HTML",
+        reply_markup=get_start_keyboard()
     )
 
 async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -541,10 +552,12 @@ def main():
     app.add_handler(CMH(on_channel_join, CMH.CHAT_MEMBER))
     if app.job_queue:
         app.job_queue.run_daily(send_digest, time=dtime(hour=10, minute=0, tzinfo=EASTERN), name="daily_digest")
-        print("JobQueue OK - Daily Digest scheduled ET 10:00")
+        # V55: 每 30 分钟自动检查 Breaking, 第一次 60 秒后执行
+        app.job_queue.run_repeating(auto_breaking_job, interval=1800, first=60, name="auto_breaking")
+        print("JobQueue OK - Daily Digest scheduled ET 10:00 + Auto Breaking every 30min")
     else:
         print("WARNING: JobQueue is None! Daily Digest will NOT auto-send. Fix requirements.txt to python-telegram-bot[job-queue]==20.7")
-    print("Scheduler v54 US News + Whale Welcome + Upstash Dedup + ET 10AM + Async Delete + HEAD Fix")
+    print("Scheduler v55.1 US News + Whale Welcome + Upstash Dedup + ET 10AM + Async Delete + HEAD Fix + Auto Breaking + Start Whale")
     print(f"CHANNEL_ID={CHANNEL_ID} BOT_USERNAME={BOT_USERNAME} BOT_LINK={get_bot_link()}")
     app.run_polling(drop_pending_updates=True, allowed_updates=["message", "chat_member", "my_chat_member"])
 
